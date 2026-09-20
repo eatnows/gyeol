@@ -14,5 +14,6 @@ publish = false
 bytemuck = { version = "1", features = ["derive"] }
 cosmic-text = "0.19"
 pollster = "1"
+taffy = { version = "0.14.0", default-features = false, features = ["std", "taffy_tree", "flexbox", "content_size"] }
 wgpu = "30"
 winit = "0.30"

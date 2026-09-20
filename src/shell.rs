@@ -54,6 +54,11 @@ impl Cx<'_> {
         self.window.set_ime_allowed(allowed);
     }
 
+    /// Sets the mouse cursor shown over the window.
+    pub fn set_cursor(&self, cursor: crate::element::Cursor) {
+        self.window.set_cursor(winit::window::CursorIcon::from(cursor));
+    }
+
     /// Tells the input method where the caret is, so its candidate window appears next to it.
     pub fn set_ime_cursor_area(&self, area: Rect) {
         self.window.set_ime_cursor_area(LogicalPosition::new(area.x, area.y), LogicalSize::new(area.w, area.h));

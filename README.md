@@ -9,6 +9,7 @@ Work in progress; nothing here is stable or published yet.
 ```sh
 cargo run --example hello        # rounded rectangles and text
 cargo run --example textinput    # text fields: mouse, keyboard, Korean IME composition
+cargo run --example settings     # declarative API: flexbox layout, hover, click (try --dark --editor)
 cargo test --lib --examples
 ```
 
