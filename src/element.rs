@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 
 use crate::{
     event::{Modifiers, MouseButton},
-    scene::Color,
+    scene::{Color, Path},
     shell::Cx,
 };
 
@@ -193,6 +193,7 @@ pub type MouseHandler<S> = Box<dyn Fn(&mut S, &mut Cx, MouseEvent)>;
 pub(crate) enum Kind<S> {
     Div(Vec<Element<S>>),
     Text(String),
+    Paths(Vec<Path>),
 }
 
 /// A node of the UI tree. Build one with [`div`] or [`text`].
@@ -214,6 +215,14 @@ pub fn div<S>() -> Element<S> {
 /// A single line of text, in the size and color inherited from its parents.
 pub fn text<S>(content: impl Into<String>) -> Element<S> {
     Element { id: None, style: Style::default(), kind: Kind::Text(content.into()), on_click: None, on_mouse_down: None, on_drag: None, on_mouse_up: None }
+}
+
+/// A layout element that paints stroked paths in its own local coordinate system.
+///
+/// Paths are moved to the element's top-left after layout, so they naturally participate in
+/// absolute positioning, scrolling and clipping like any other element.
+pub fn paths<S>(items: Vec<Path>) -> Element<S> {
+    Element { id: None, style: Style::default(), kind: Kind::Paths(items), on_click: None, on_mouse_down: None, on_drag: None, on_mouse_up: None }
 }
 
 impl<S> Element<S> {

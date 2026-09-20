@@ -7,7 +7,7 @@ use winit::{dpi::PhysicalSize, window::Window};
 use crate::{
     error::{err, Error, Result},
     gpu::{Globals, GrowBuffer},
-    scene::{Item, Quad, Rect, Scene},
+    scene::{Item, Path, PathCommand, Quad, Rect, Scene},
     shaper::Shaper,
     text::TextSystem,
 };
@@ -36,10 +36,18 @@ impl From<&Quad> for QuadInstance {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct PathVertex {
+    pos: [f32; 2],
+    color: [f32; 4],
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BatchKind {
     Quads,
     Glyphs,
+    Paths,
 }
 
 /// A run of same-kind items drawn under one clip.
@@ -59,6 +67,8 @@ pub struct Renderer {
     globals_group: wgpu::BindGroup,
     quad_pipeline: wgpu::RenderPipeline,
     quad_instances: GrowBuffer,
+    path_pipeline: wgpu::RenderPipeline,
+    path_vertices: GrowBuffer,
     text: TextSystem,
 }
 
@@ -123,6 +133,8 @@ impl Renderer {
 
         let quad_pipeline = create_quad_pipeline(&device, config.format, &globals_layout);
         let quad_instances = GrowBuffer::new(&device, wgpu::BufferUsages::VERTEX);
+        let path_pipeline = create_path_pipeline(&device, config.format, &globals_layout);
+        let path_vertices = GrowBuffer::new(&device, wgpu::BufferUsages::VERTEX);
         let text = TextSystem::new(&device, config.format, &globals_layout);
 
         Ok(Renderer {
@@ -135,6 +147,8 @@ impl Renderer {
             globals_group,
             quad_pipeline,
             quad_instances,
+            path_pipeline,
+            path_vertices,
             text,
         })
     }
@@ -185,6 +199,7 @@ impl Renderer {
         // neighbouring items of the same kind and clip into batches.
         let glyph_ranges = self.text.prepare(shaper, &self.device, &self.queue, scene.texts(), self.scale_factor);
         let mut quads: Vec<QuadInstance> = Vec::new();
+        let mut paths: Vec<PathVertex> = Vec::new();
         let mut batches: Vec<Batch> = Vec::new();
         let mut next_text = 0;
         for item in &scene.items {
@@ -197,6 +212,11 @@ impl Renderer {
                     next_text += 1;
                     (BatchKind::Glyphs, glyph_ranges[next_text - 1].clone(), t.clip)
                 }
+                Item::Path(path) => {
+                    let start = paths.len() as u32;
+                    tessellate_path(path, &mut paths);
+                    (BatchKind::Paths, start..paths.len() as u32, path.clip)
+                }
             };
             if range.is_empty() {
                 continue;
@@ -207,6 +227,7 @@ impl Renderer {
             }
         }
         self.quad_instances.write(&self.device, &self.queue, bytemuck::cast_slice(&quads));
+        self.path_vertices.write(&self.device, &self.queue, bytemuck::cast_slice(&paths));
 
         let clear = scene.background.map_or(wgpu::Color::BLACK, |c| wgpu::Color {
             r: c.r as f64,
@@ -240,12 +261,79 @@ impl Renderer {
                         pass.draw(0..6, batch.range.clone());
                     }
                     BatchKind::Glyphs => self.text.draw(&mut pass, &self.globals_group, batch.range.clone()),
+                    BatchKind::Paths => {
+                        pass.set_pipeline(&self.path_pipeline);
+                        pass.set_bind_group(0, &self.globals_group, &[]);
+                        pass.set_vertex_buffer(0, self.path_vertices.buffer.slice(..));
+                        pass.draw(batch.range.clone(), 0..1);
+                    }
                 }
             }
         }
         self.queue.submit(Some(encoder.finish()));
         self.queue.present(frame);
     }
+}
+
+/// Turns each segment into two triangles. Curves are flattened finely enough for the small,
+/// two-pixel graph lanes this primitive was introduced for.
+fn tessellate_path(path: &Path, vertices: &mut Vec<PathVertex>) {
+    if path.width <= 0. || path.color.a <= 0. {
+        return;
+    }
+    let mut at = None;
+    for command in &path.commands {
+        match *command {
+            PathCommand::MoveTo(x, y) => at = Some((x, y)),
+            PathCommand::LineTo(x, y) => {
+                if let Some(from) = at {
+                    push_segment(vertices, from, (x, y), path.width, path.color.to_array());
+                }
+                at = Some((x, y));
+            }
+            PathCommand::CubicTo(cx0, cy0, cx1, cy1, x, y) => {
+                if let Some(from) = at {
+                    let mut previous = from;
+                    // Twelve pieces make the graph's 16px-wide curves visually smooth while
+                    // keeping the display list inexpensive.
+                    for i in 1..=12 {
+                        let t = i as f32 / 12.;
+                        let point = cubic(from, (cx0, cy0), (cx1, cy1), (x, y), t);
+                        push_segment(vertices, previous, point, path.width, path.color.to_array());
+                        previous = point;
+                    }
+                }
+                at = Some((x, y));
+            }
+        }
+    }
+}
+
+fn cubic(a: (f32, f32), b: (f32, f32), c: (f32, f32), d: (f32, f32), t: f32) -> (f32, f32) {
+    let u = 1. - t;
+    let u2 = u * u;
+    let t2 = t * t;
+    (
+        u2 * u * a.0 + 3. * u2 * t * b.0 + 3. * u * t2 * c.0 + t2 * t * d.0,
+        u2 * u * a.1 + 3. * u2 * t * b.1 + 3. * u * t2 * c.1 + t2 * t * d.1,
+    )
+}
+
+fn push_segment(vertices: &mut Vec<PathVertex>, a: (f32, f32), b: (f32, f32), width: f32, color: [f32; 4]) {
+    let dx = b.0 - a.0;
+    let dy = b.1 - a.1;
+    let length = (dx * dx + dy * dy).sqrt();
+    if length <= f32::EPSILON {
+        return;
+    }
+    let half = width / 2.;
+    let nx = -dy / length * half;
+    let ny = dx / length * half;
+    let a0 = PathVertex { pos: [a.0 + nx, a.1 + ny], color };
+    let a1 = PathVertex { pos: [a.0 - nx, a.1 - ny], color };
+    let b0 = PathVertex { pos: [b.0 + nx, b.1 + ny], color };
+    let b1 = PathVertex { pos: [b.0 - nx, b.1 - ny], color };
+    vertices.extend([a0, a1, b1, a0, b1, b0]);
 }
 
 fn create_quad_pipeline(
@@ -292,4 +380,71 @@ fn create_quad_pipeline(
         multiview_mask: None,
         cache: None,
     })
+}
+
+fn create_path_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    globals_layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("gyeol path shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("path.wgsl").into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("gyeol path layout"),
+        bind_group_layouts: &[Some(globals_layout)],
+        immediate_size: 0,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("gyeol path pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<PathVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4],
+            })],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::Color;
+
+    #[test]
+    fn a_line_becomes_two_triangles() {
+        let mut vertices = Vec::new();
+        tessellate_path(&Path::stroke(Color::hex(0xffffff), 2.).move_to(0., 0.).line_to(10., 0.), &mut vertices);
+        assert_eq!(vertices.len(), 6);
+        assert_eq!(vertices[0].pos, [0., 1.]);
+        assert_eq!(vertices[2].pos, [10., -1.]);
+    }
+
+    #[test]
+    fn a_cubic_is_flattened_into_segments() {
+        let mut vertices = Vec::new();
+        tessellate_path(&Path::stroke(Color::hex(0xffffff), 2.).move_to(0., 0.).cubic_to(0., 10., 10., 10., 10., 0.), &mut vertices);
+        assert_eq!(vertices.len(), 12 * 6);
+    }
 }

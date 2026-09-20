@@ -125,11 +125,77 @@ impl Text {
     }
 }
 
+/// One drawing command in a stroked path. Coordinates are logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PathCommand {
+    MoveTo(f32, f32),
+    LineTo(f32, f32),
+    /// A cubic Bezier segment: first control, second control, then end point.
+    CubicTo(f32, f32, f32, f32, f32, f32),
+}
+
+/// A single-colour stroked path. It is useful for lightweight diagrams such as a commit graph.
+#[derive(Clone, Debug)]
+pub struct Path {
+    pub commands: Vec<PathCommand>,
+    pub color: Color,
+    pub width: f32,
+    /// Only the part inside this rectangle is drawn.
+    pub clip: Option<Rect>,
+}
+
+impl Path {
+    pub fn stroke(color: Color, width: f32) -> Path {
+        Path { commands: Vec::new(), color, width, clip: None }
+    }
+
+    pub fn move_to(mut self, x: f32, y: f32) -> Self {
+        self.commands.push(PathCommand::MoveTo(x, y));
+        self
+    }
+
+    pub fn line_to(mut self, x: f32, y: f32) -> Self {
+        self.commands.push(PathCommand::LineTo(x, y));
+        self
+    }
+
+    pub fn cubic_to(mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) -> Self {
+        self.commands.push(PathCommand::CubicTo(cx0, cy0, cx1, cy1, x, y));
+        self
+    }
+
+    pub fn clipped(mut self, clip: Option<Rect>) -> Self {
+        self.clip = clip;
+        self
+    }
+
+    pub(crate) fn translated(mut self, x: f32, y: f32) -> Self {
+        for command in &mut self.commands {
+            match command {
+                PathCommand::MoveTo(px, py) | PathCommand::LineTo(px, py) => {
+                    *px += x;
+                    *py += y;
+                }
+                PathCommand::CubicTo(cx0, cy0, cx1, cy1, px, py) => {
+                    *cx0 += x;
+                    *cy0 += y;
+                    *cx1 += x;
+                    *cy1 += y;
+                    *px += x;
+                    *py += y;
+                }
+            }
+        }
+        self
+    }
+}
+
 /// One thing to draw.
 #[derive(Clone, Debug)]
 pub enum Item {
     Quad(Quad),
     Text(Text),
+    Path(Path),
 }
 
 /// Everything to draw in one frame, in painting order: later items cover earlier ones.
@@ -148,11 +214,36 @@ impl Scene {
         self.items.push(Item::Text(text));
     }
 
+    pub fn push_path(&mut self, path: Path) {
+        self.items.push(Item::Path(path));
+    }
+
     pub fn quads(&self) -> impl Iterator<Item = &Quad> {
         self.items.iter().filter_map(|i| if let Item::Quad(q) = i { Some(q) } else { None })
     }
 
     pub fn texts(&self) -> impl Iterator<Item = &Text> {
         self.items.iter().filter_map(|i| if let Item::Text(t) = i { Some(t) } else { None })
+    }
+
+    pub fn paths(&self) -> impl Iterator<Item = &Path> {
+        self.items.iter().filter_map(|i| if let Item::Path(p) = i { Some(p) } else { None })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_path_keeps_its_commands_and_can_be_translated() {
+        let path = Path::stroke(Color::hex(0x123456), 2.)
+            .move_to(1., 2.)
+            .cubic_to(3., 4., 5., 6., 7., 8.)
+            .translated(10., 20.);
+        assert_eq!(path.commands, vec![
+            PathCommand::MoveTo(11., 22.),
+            PathCommand::CubicTo(13., 24., 15., 26., 17., 28.),
+        ]);
     }
 }

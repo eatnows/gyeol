@@ -5,7 +5,7 @@ use taffy::{prelude::*, tree::LayoutOutput, TaffyTree};
 
 use crate::{
     element::{Align, Cursor, Direction, Element, ElementId, Handler, Justify, Kind, Length, MouseHandler, Overflow, Style},
-    scene::{Color, Quad, Rect, Scene, Text},
+    scene::{Color, Path, Quad, Rect, Scene, Text},
     shaper::{Shaper, TextStyle},
 };
 
@@ -43,6 +43,7 @@ pub(crate) struct Node<S> {
     border_color: Color,
     radii: [f32; 4],
     text: Option<(String, TextStyle, Color)>,
+    paths: Vec<Path>,
     cursor: Cursor,
     on_click: Option<Handler<S>>,
     on_mouse_down: Option<MouseHandler<S>>,
@@ -274,6 +275,9 @@ pub(crate) fn layout_and_paint<S>(
         if let Some((content, size, color)) = &node.text {
             scene.push_text(Text::new((node.bounds.x, node.bounds.y), content.clone(), *size, *color).clipped(node.clip));
         }
+        for path in &node.paths {
+            scene.push_path(path.clone().translated(node.bounds.x, node.bounds.y).clipped(node.clip));
+        }
         if let (Some(color), true) = (node.scrollbar, node.scroll_max.1 > 0.) {
             let (view_h, content_h) = (node.bounds.h, node.bounds.h + node.scroll_max.1);
             let thumb_h = (view_h * view_h / content_h).max(THUMB_MIN).min(view_h);
@@ -318,6 +322,7 @@ fn build<S>(
         border_color: style.border_color,
         radii: style.radii,
         text: None,
+        paths: Vec::new(),
         cursor: style.cursor,
         on_click,
         on_mouse_down,
@@ -342,6 +347,10 @@ fn build<S>(
         Kind::Div(children) => {
             let ids: Vec<NodeId> = children.into_iter().map(|c| build(c, Some(index), below, tree, nodes)).collect();
             tree.new_with_children(taffy_style, &ids).expect("container")
+        }
+        Kind::Paths(paths) => {
+            nodes[index].paths = paths;
+            tree.new_leaf(taffy_style).expect("path leaf")
         }
     };
     nodes[index].taffy_id = taffy_id;
