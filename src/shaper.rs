@@ -1,7 +1,48 @@
 //! Text shaping and measuring. Needs no GPU, so layout code and tests can use it directly.
 use std::collections::HashMap;
 
-use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping};
+use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style as FontStyle, Weight};
+
+/// How a run of text looks: size plus optional family, weight and slant.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextStyle {
+    pub size: f32,
+    /// A font family by name (`"Menlo"`); the system's default sans-serif when `None` or missing.
+    pub family: Option<&'static str>,
+    pub bold: bool,
+    pub italic: bool,
+}
+
+impl TextStyle {
+    pub fn new(size: f32) -> TextStyle {
+        TextStyle { size, family: None, bold: false, italic: false }
+    }
+
+    pub fn family(mut self, family: &'static str) -> TextStyle {
+        self.family = Some(family);
+        self
+    }
+
+    pub fn bold(mut self) -> TextStyle {
+        self.bold = true;
+        self
+    }
+
+    pub fn italic(mut self) -> TextStyle {
+        self.italic = true;
+        self
+    }
+
+    fn key(&self) -> (u32, Option<&'static str>, bool, bool) {
+        (self.size.to_bits(), self.family, self.bold, self.italic)
+    }
+}
+
+impl From<f32> for TextStyle {
+    fn from(size: f32) -> TextStyle {
+        TextStyle::new(size)
+    }
+}
 
 /// Shapes text with system fonts (with per-script fallback) and answers measuring questions.
 ///
@@ -9,7 +50,7 @@ use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping};
 /// frame is cheap.
 pub struct Shaper {
     font_system: FontSystem,
-    shaped: HashMap<(String, u32), (Buffer, u64)>,
+    shaped: HashMap<(String, (u32, Option<&'static str>, bool, bool)), (Buffer, u64)>,
     frame: u64,
 }
 
@@ -30,15 +71,15 @@ impl Shaper {
     }
 
     /// The width of `text` laid out on one line.
-    pub fn width(&mut self, text: &str, size: f32) -> f32 {
-        let (buffer, _) = self.buffer_and_fonts(text, size);
+    pub fn width(&mut self, text: &str, style: impl Into<TextStyle>) -> f32 {
+        let (buffer, _) = self.buffer_and_fonts(text, style.into());
         buffer.layout_runs().next().map_or(0., |run| run.line_w)
     }
 
     /// The x offset of the caret before the character at byte index `byte` (clamped to the text).
     /// Positions inside a multi-character cluster snap to the cluster's start.
-    pub fn caret_x(&mut self, text: &str, size: f32, byte: usize) -> f32 {
-        let (buffer, _) = self.buffer_and_fonts(text, size);
+    pub fn caret_x(&mut self, text: &str, style: impl Into<TextStyle>, byte: usize) -> f32 {
+        let (buffer, _) = self.buffer_and_fonts(text, style.into());
         let Some(run) = buffer.layout_runs().next() else { return 0. };
         for glyph in run.glyphs {
             if byte <= glyph.start {
@@ -52,8 +93,8 @@ impl Shaper {
     }
 
     /// The byte index of the caret position closest to `x` (used for clicking into text).
-    pub fn hit(&mut self, text: &str, size: f32, x: f32) -> usize {
-        let (buffer, _) = self.buffer_and_fonts(text, size);
+    pub fn hit(&mut self, text: &str, style: impl Into<TextStyle>, x: f32) -> usize {
+        let (buffer, _) = self.buffer_and_fonts(text, style.into());
         let Some(run) = buffer.layout_runs().next() else { return 0 };
         for glyph in run.glyphs {
             if x < glyph.x + glyph.w / 2. {
@@ -74,12 +115,23 @@ impl Shaper {
     }
 
     /// The shaped `text`, plus the font system (needed to rasterize its glyphs).
-    pub(crate) fn buffer_and_fonts(&mut self, text: &str, size: f32) -> (&Buffer, &mut FontSystem) {
+    pub(crate) fn buffer_and_fonts(&mut self, text: &str, style: TextStyle) -> (&Buffer, &mut FontSystem) {
         let frame = self.frame;
-        let entry = self.shaped.entry((text.to_string(), size.to_bits())).or_insert_with(|| {
+        let entry = self.shaped.entry((text.to_string(), style.key())).or_insert_with(|| {
+            let size = style.size;
             let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(size, Self::line_height(size)));
             buffer.set_size(None, None);
-            buffer.set_text(text, &Attrs::new(), Shaping::Advanced, None);
+            let mut attrs = Attrs::new();
+            if let Some(name) = style.family {
+                attrs = attrs.family(Family::Name(name));
+            }
+            if style.bold {
+                attrs = attrs.weight(Weight::BOLD);
+            }
+            if style.italic {
+                attrs = attrs.style(FontStyle::Italic);
+            }
+            buffer.set_text(text, &attrs, Shaping::Advanced, None);
             buffer.shape_until_scroll(&mut self.font_system, false);
             (buffer, frame)
         });
@@ -116,5 +168,16 @@ mod tests {
         assert_eq!(shaper.width("", 16.), 0.);
         assert_eq!(shaper.caret_x("", 16., 0), 0.);
         assert_eq!(shaper.hit("", 16., 10.), 0);
+    }
+
+    #[test]
+    fn style_changes_the_measured_width() {
+        let mut shaper = Shaper::new();
+        let plain = shaper.width("Hello world", 16.);
+        let bold = shaper.width("Hello world", TextStyle::new(16.).bold());
+        assert!(bold > plain, "bold text is wider: {bold} vs {plain}");
+        let mono = |s: &mut Shaper, t: &str| s.width(t, TextStyle::new(16.).family("Menlo"));
+        assert_eq!(mono(&mut shaper, "iiiiii"), mono(&mut shaper, "WWWWWW"), "a monospace family gives every character the same width");
+        assert_ne!(shaper.width("iiiiii", 16.), shaper.width("WWWWWW", 16.), "the default family is proportional");
     }
 }

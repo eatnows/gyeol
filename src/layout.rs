@@ -6,11 +6,22 @@ use taffy::{prelude::*, tree::LayoutOutput, TaffyTree};
 use crate::{
     element::{Align, Cursor, Direction, Element, ElementId, Handler, Justify, Kind, Length, Overflow, Style},
     scene::{Color, Quad, Rect, Scene, Text},
-    shaper::Shaper,
+    shaper::{Shaper, TextStyle},
 };
 
-const DEFAULT_TEXT_COLOR: Color = Color::hex(0x000000);
-const DEFAULT_TEXT_SIZE: f32 = 14.;
+/// Text properties that flow down from ancestors to the text inside them.
+#[derive(Clone, Copy)]
+struct Inherited {
+    color: Color,
+    style: TextStyle,
+}
+
+impl Default for Inherited {
+    fn default() -> Self {
+        Inherited { color: Color::hex(0x000000), style: TextStyle::new(14.) }
+    }
+}
+
 const THUMB_WIDTH: f32 = 6.;
 const THUMB_MIN: f32 = 24.;
 
@@ -19,7 +30,7 @@ pub(crate) type ScrollStore = HashMap<ElementId, (f32, f32)>;
 
 struct TextLeaf {
     content: String,
-    size: f32,
+    style: TextStyle,
 }
 
 /// One laid-out element, in paint order (parents before their children).
@@ -31,7 +42,7 @@ pub(crate) struct Node<S> {
     border_width: f32,
     border_color: Color,
     radii: [f32; 4],
-    text: Option<(String, f32, Color)>,
+    text: Option<(String, TextStyle, Color)>,
     cursor: Cursor,
     on_click: Option<Handler<S>>,
     taffy_id: NodeId,
@@ -137,12 +148,12 @@ pub(crate) fn layout_and_paint<S>(
     let mut root = root;
     root.style.width = Length::Px(size.0);
     root.style.height = Length::Px(size.1);
-    let root_id = build(root, None, (DEFAULT_TEXT_COLOR, DEFAULT_TEXT_SIZE), &mut tree, &mut nodes);
+    let root_id = build(root, None, Inherited::default(), &mut tree, &mut nodes);
 
     let available = taffy::Size { width: AvailableSpace::Definite(size.0), height: AvailableSpace::Definite(size.1) };
     let _ = tree.compute_layout_with_measure(root_id, available, |input, _, leaf, _| {
         let (w, h) = match leaf {
-            Some(leaf) => (shaper.width(&leaf.content, leaf.size), Shaper::line_height(leaf.size)),
+            Some(leaf) => (shaper.width(&leaf.content, leaf.style), Shaper::line_height(leaf.style.size)),
             None => (0., 0.),
         };
         LayoutOutput::from_outer_size(taffy::Size {
@@ -226,13 +237,18 @@ pub(crate) fn layout_and_paint<S>(
 fn build<S>(
     el: Element<S>,
     parent: Option<usize>,
-    inherited: (Color, f32),
+    inherited: Inherited,
     tree: &mut TaffyTree<TextLeaf>,
     nodes: &mut Vec<Node<S>>,
 ) -> NodeId {
     let Element { id, style, kind, on_click } = el;
-    let text_color = style.text_color.unwrap_or(inherited.0);
-    let text_size = style.text_size.unwrap_or(inherited.1);
+    let mut text_style = inherited.style;
+    text_style.size = style.text_size.unwrap_or(text_style.size);
+    text_style.family = style.text_family.or(text_style.family);
+    text_style.bold = style.text_bold.unwrap_or(text_style.bold);
+    text_style.italic = style.text_italic.unwrap_or(text_style.italic);
+    let text_color = style.text_color.unwrap_or(inherited.color);
+    let below = Inherited { color: text_color, style: text_style };
     let index = nodes.len();
     let taffy_style = to_taffy(&style);
 
@@ -261,11 +277,11 @@ fn build<S>(
 
     let taffy_id = match kind {
         Kind::Text(content) => {
-            nodes[index].text = Some((content.clone(), text_size, text_color));
-            tree.new_leaf_with_context(taffy_style, TextLeaf { content, size: text_size }).expect("leaf")
+            nodes[index].text = Some((content.clone(), text_style, text_color));
+            tree.new_leaf_with_context(taffy_style, TextLeaf { content, style: text_style }).expect("leaf")
         }
         Kind::Div(children) => {
-            let ids: Vec<NodeId> = children.into_iter().map(|c| build(c, Some(index), (text_color, text_size), tree, nodes)).collect();
+            let ids: Vec<NodeId> = children.into_iter().map(|c| build(c, Some(index), below, tree, nodes)).collect();
             tree.new_with_children(taffy_style, &ids).expect("container")
         }
     };
@@ -413,7 +429,7 @@ mod tests {
         assert!((w - shaper.width("Hello 결", 20.)).abs() <= 1., "layout rounds to whole pixels: {w}");
         assert_eq!(h, Shaper::line_height(20.));
         assert_eq!(scene.texts().count(), 1);
-        assert_eq!(scene.texts().next().unwrap().size, 20., "size is inherited from the container");
+        assert_eq!(scene.texts().next().unwrap().style.size, 20., "size is inherited from the container");
     }
 
     #[test]

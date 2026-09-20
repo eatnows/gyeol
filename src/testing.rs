@@ -154,7 +154,7 @@ impl<S: View> TestHost<S> {
             let all: Vec<&str> = self.scene.texts().map(|t| t.content.as_str()).collect();
             panic!("no text {content:?} on screen; there is {all:?}");
         };
-        let (w, h) = (self.shaper.width(&t.content, t.size), Shaper::line_height(t.size));
+        let (w, h) = (self.shaper.width(&t.content, t.style), Shaper::line_height(t.style.size));
         (t.origin.0 + w / 2., t.origin.1 + h / 2.)
     }
 

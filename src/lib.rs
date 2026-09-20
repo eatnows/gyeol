@@ -24,6 +24,6 @@ pub use event::{Event, Ime, Key, Modifiers, MouseButton, NamedKey, ScrollDelta, 
 pub use renderer::Renderer;
 pub use scene::{Color, Quad, Rect, Scene, Text};
 pub use list::uniform_list;
-pub use shaper::Shaper;
+pub use shaper::{Shaper, TextStyle};
 pub use shell::{run, run_with, App, Cx, Platform, WindowOptions};
 pub use view::{run_view, run_view_with, View};

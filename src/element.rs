@@ -115,6 +115,9 @@ pub struct Style {
     /// Inherited by descendants that do not set their own.
     pub text_color: Option<Color>,
     pub text_size: Option<f32>,
+    pub text_family: Option<&'static str>,
+    pub text_bold: Option<bool>,
+    pub text_italic: Option<bool>,
     pub cursor: Cursor,
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
@@ -149,6 +152,9 @@ impl Default for Style {
             hover_background: None,
             text_color: None,
             text_size: None,
+            text_family: None,
+            text_bold: None,
+            text_italic: None,
             cursor: Cursor::Default,
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
@@ -446,6 +452,22 @@ impl<S> Element<S> {
 
     pub fn text_size(mut self, size: f32) -> Self {
         self.style.text_size = Some(size);
+        self
+    }
+
+    /// Sets the font family (by name) for this element's text and its descendants'.
+    pub fn text_family(mut self, family: &'static str) -> Self {
+        self.style.text_family = Some(family);
+        self
+    }
+
+    pub fn text_bold(mut self) -> Self {
+        self.style.text_bold = Some(true);
+        self
+    }
+
+    pub fn text_italic(mut self) -> Self {
+        self.style.text_italic = Some(true);
         self
     }
 

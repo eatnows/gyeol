@@ -2,6 +2,8 @@
 //!
 //! Building a [`Scene`] needs no GPU or window, so layout and painting logic can be tested headlessly.
 
+use crate::shaper::TextStyle;
+
 /// An sRGB color with straight (non-premultiplied) alpha, each channel in `0.0..=1.0`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Color {
@@ -106,15 +108,15 @@ impl Quad {
 pub struct Text {
     pub origin: (f32, f32),
     pub content: String,
-    pub size: f32,
+    pub style: TextStyle,
     pub color: Color,
     /// Only the part inside this rectangle is drawn.
     pub clip: Option<Rect>,
 }
 
 impl Text {
-    pub fn new(origin: (f32, f32), content: impl Into<String>, size: f32, color: Color) -> Text {
-        Text { origin, content: content.into(), size, color, clip: None }
+    pub fn new(origin: (f32, f32), content: impl Into<String>, style: impl Into<TextStyle>, color: Color) -> Text {
+        Text { origin, content: content.into(), style: style.into(), color, clip: None }
     }
 
     pub fn clipped(mut self, clip: Option<Rect>) -> Text {
