@@ -4,9 +4,11 @@
 //! [`shell`] that opens a window and runs an [`App`].
 
 mod error;
+mod gpu;
 pub mod renderer;
 pub mod scene;
 pub mod shell;
+mod text;
 
 pub use error::{Error, Result};
 pub use renderer::Renderer;

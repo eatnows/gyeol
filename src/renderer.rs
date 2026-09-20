@@ -6,15 +6,10 @@ use winit::{dpi::PhysicalSize, window::Window};
 
 use crate::{
     error::{err, Error, Result},
+    gpu::{Globals, GrowBuffer},
     scene::{Quad, Scene},
+    text::TextSystem,
 };
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Globals {
-    viewport: [f32; 2],
-    _pad: [f32; 2],
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -38,40 +33,6 @@ impl From<&Quad> for QuadInstance {
     }
 }
 
-/// A GPU buffer that grows (never shrinks) to fit what is written to it each frame.
-struct GrowBuffer {
-    buffer: wgpu::Buffer,
-    capacity: u64,
-    usage: wgpu::BufferUsages,
-}
-
-impl GrowBuffer {
-    fn new(device: &wgpu::Device, usage: wgpu::BufferUsages) -> Self {
-        let capacity = 4096;
-        GrowBuffer { buffer: Self::alloc(device, capacity, usage), capacity, usage }
-    }
-
-    fn alloc(device: &wgpu::Device, size: u64, usage: wgpu::BufferUsages) -> wgpu::Buffer {
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("gyeolui buffer"),
-            size,
-            usage: usage | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })
-    }
-
-    fn write(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, bytes: &[u8]) {
-        let needed = bytes.len() as u64;
-        if needed > self.capacity {
-            self.capacity = needed.next_power_of_two();
-            self.buffer = Self::alloc(device, self.capacity, self.usage);
-        }
-        if !bytes.is_empty() {
-            queue.write_buffer(&self.buffer, 0, bytes);
-        }
-    }
-}
-
 pub struct Renderer {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -82,6 +43,7 @@ pub struct Renderer {
     globals_group: wgpu::BindGroup,
     quad_pipeline: wgpu::RenderPipeline,
     quad_instances: GrowBuffer,
+    text: TextSystem,
 }
 
 impl Renderer {
@@ -145,6 +107,7 @@ impl Renderer {
 
         let quad_pipeline = create_quad_pipeline(&device, config.format, &globals_layout);
         let quad_instances = GrowBuffer::new(&device, wgpu::BufferUsages::VERTEX);
+        let text = TextSystem::new(&device, config.format, &globals_layout);
 
         Ok(Renderer {
             surface,
@@ -156,6 +119,7 @@ impl Renderer {
             globals_group,
             quad_pipeline,
             quad_instances,
+            text,
         })
     }
 
@@ -190,6 +154,8 @@ impl Renderer {
         let quads: Vec<QuadInstance> = scene.quads.iter().map(QuadInstance::from).collect();
         self.quad_instances.write(&self.device, &self.queue, bytemuck::cast_slice(&quads));
 
+        self.text.prepare(&self.device, &self.queue, &scene.texts, self.scale_factor);
+
         let clear = scene.background.map_or(wgpu::Color::BLACK, |c| wgpu::Color {
             r: c.r as f64,
             g: c.g as f64,
@@ -217,6 +183,7 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.quad_instances.buffer.slice(..));
                 pass.draw(0..6, 0..quads.len() as u32);
             }
+            self.text.draw(&mut pass, &self.globals_group);
         }
         self.queue.submit(Some(encoder.finish()));
         self.queue.present(frame);
