@@ -188,6 +188,7 @@ impl Settings {
                     .h(40.)
                     .px(16.)
                     .bg(p.chrome)
+                    .rounded_top(9.)
                     .child(text("Settings").text_size(14.).text_color(p.strong))
                     .child(
                         div()

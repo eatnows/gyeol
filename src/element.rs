@@ -73,7 +73,8 @@ pub struct Style {
     pub background: Option<Color>,
     pub border_width: f32,
     pub border_color: Color,
-    pub radius: f32,
+    /// Corner radii: top-left, top-right, bottom-right, bottom-left.
+    pub radii: [f32; 4],
     pub hover_background: Option<Color>,
     /// Inherited by descendants that do not set their own.
     pub text_color: Option<Color>,
@@ -103,7 +104,7 @@ impl Default for Style {
             background: None,
             border_width: 0.,
             border_color: Color::TRANSPARENT,
-            radius: 0.,
+            radii: [0.; 4],
             hover_background: None,
             text_color: None,
             text_size: None,
@@ -328,7 +329,21 @@ impl<S> Element<S> {
     }
 
     pub fn rounded(mut self, radius: f32) -> Self {
-        self.style.radius = radius;
+        self.style.radii = [radius; 4];
+        self
+    }
+
+    /// Rounds only the top corners (e.g. a header inside a rounded box).
+    pub fn rounded_top(mut self, radius: f32) -> Self {
+        self.style.radii[0] = radius;
+        self.style.radii[1] = radius;
+        self
+    }
+
+    /// Rounds only the bottom corners.
+    pub fn rounded_bottom(mut self, radius: f32) -> Self {
+        self.style.radii[2] = radius;
+        self.style.radii[3] = radius;
         self
     }
 

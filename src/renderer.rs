@@ -7,7 +7,7 @@ use winit::{dpi::PhysicalSize, window::Window};
 use crate::{
     error::{err, Error, Result},
     gpu::{Globals, GrowBuffer},
-    scene::{Quad, Scene},
+    scene::{Item, Quad, Rect, Scene},
     shaper::Shaper,
     text::TextSystem,
 };
@@ -19,7 +19,8 @@ struct QuadInstance {
     size: [f32; 2],
     background: [f32; 4],
     border_color: [f32; 4],
-    params: [f32; 2],
+    radii: [f32; 4],
+    border_width: f32,
 }
 
 impl From<&Quad> for QuadInstance {
@@ -29,9 +30,23 @@ impl From<&Quad> for QuadInstance {
             size: [q.bounds.w, q.bounds.h],
             background: q.background.to_array(),
             border_color: q.border_color.to_array(),
-            params: [q.border_width, q.corner_radius],
+            radii: q.corner_radii,
+            border_width: q.border_width,
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BatchKind {
+    Quads,
+    Glyphs,
+}
+
+/// A run of same-kind items drawn under one clip.
+struct Batch {
+    kind: BatchKind,
+    range: std::ops::Range<u32>,
+    clip: Option<Rect>,
 }
 
 pub struct Renderer {
@@ -139,6 +154,19 @@ impl Renderer {
         (self.config.width as f32 / self.scale_factor, self.config.height as f32 / self.scale_factor)
     }
 
+    /// The scissor rectangle in device pixels for a logical clip (`None` clip = the whole target), or
+    /// `None` when nothing of it is visible.
+    fn scissor(&self, clip: Option<Rect>) -> Option<(u32, u32, u32, u32)> {
+        let (tw, th) = (self.config.width, self.config.height);
+        let Some(clip) = clip else { return Some((0, 0, tw, th)) };
+        let s = self.scale_factor;
+        let x0 = ((clip.x * s).floor().max(0.) as u32).min(tw);
+        let y0 = ((clip.y * s).floor().max(0.) as u32).min(th);
+        let x1 = (((clip.x + clip.w) * s).ceil().max(0.) as u32).min(tw);
+        let y1 = (((clip.y + clip.h) * s).ceil().max(0.) as u32).min(th);
+        (x1 > x0 && y1 > y0).then_some((x0, y0, x1 - x0, y1 - y0))
+    }
+
     pub fn render(&mut self, scene: &Scene, shaper: &mut Shaper) {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
@@ -152,10 +180,33 @@ impl Renderer {
 
         let (w, h) = self.logical_size();
         self.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&Globals { viewport: [w, h], _pad: [0.; 2] }));
-        let quads: Vec<QuadInstance> = scene.quads.iter().map(QuadInstance::from).collect();
-        self.quad_instances.write(&self.device, &self.queue, bytemuck::cast_slice(&quads));
 
-        self.text.prepare(shaper, &self.device, &self.queue, &scene.texts, self.scale_factor);
+        // Glyphs first (they may upload to the atlas), then walk the scene in painting order and group
+        // neighbouring items of the same kind and clip into batches.
+        let glyph_ranges = self.text.prepare(shaper, &self.device, &self.queue, scene.texts(), self.scale_factor);
+        let mut quads: Vec<QuadInstance> = Vec::new();
+        let mut batches: Vec<Batch> = Vec::new();
+        let mut next_text = 0;
+        for item in &scene.items {
+            let (kind, range, clip) = match item {
+                Item::Quad(q) => {
+                    quads.push(QuadInstance::from(q));
+                    (BatchKind::Quads, quads.len() as u32 - 1..quads.len() as u32, q.clip)
+                }
+                Item::Text(t) => {
+                    next_text += 1;
+                    (BatchKind::Glyphs, glyph_ranges[next_text - 1].clone(), t.clip)
+                }
+            };
+            if range.is_empty() {
+                continue;
+            }
+            match batches.last_mut() {
+                Some(last) if last.kind == kind && last.clip == clip && last.range.end == range.start => last.range.end = range.end,
+                _ => batches.push(Batch { kind, range, clip }),
+            }
+        }
+        self.quad_instances.write(&self.device, &self.queue, bytemuck::cast_slice(&quads));
 
         let clear = scene.background.map_or(wgpu::Color::BLACK, |c| wgpu::Color {
             r: c.r as f64,
@@ -163,10 +214,10 @@ impl Renderer {
             b: c.b as f64,
             a: c.a as f64,
         });
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gyeol frame") });
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gyeolui frame") });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("gyeol pass"),
+                label: Some("gyeolui pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,
@@ -178,13 +229,19 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if !quads.is_empty() {
-                pass.set_pipeline(&self.quad_pipeline);
-                pass.set_bind_group(0, &self.globals_group, &[]);
-                pass.set_vertex_buffer(0, self.quad_instances.buffer.slice(..));
-                pass.draw(0..6, 0..quads.len() as u32);
+            for batch in &batches {
+                let Some((x, y, cw, ch)) = self.scissor(batch.clip) else { continue };
+                pass.set_scissor_rect(x, y, cw, ch);
+                match batch.kind {
+                    BatchKind::Quads => {
+                        pass.set_pipeline(&self.quad_pipeline);
+                        pass.set_bind_group(0, &self.globals_group, &[]);
+                        pass.set_vertex_buffer(0, self.quad_instances.buffer.slice(..));
+                        pass.draw(0..6, batch.range.clone());
+                    }
+                    BatchKind::Glyphs => self.text.draw(&mut pass, &self.globals_group, batch.range.clone()),
+                }
             }
-            self.text.draw(&mut pass, &self.globals_group);
         }
         self.queue.submit(Some(encoder.finish()));
         self.queue.present(frame);
@@ -216,8 +273,7 @@ fn create_quad_pipeline(
                 array_stride: std::mem::size_of::<QuadInstance>() as u64,
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &wgpu::vertex_attr_array![
-                    0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4, 4 => Float32x2
-                ],
+                    0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32                ],
             })],
         },
         fragment: Some(wgpu::FragmentState {

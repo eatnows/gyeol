@@ -61,7 +61,6 @@ pub(crate) struct TextSystem {
     pipeline: wgpu::RenderPipeline,
     atlas_group: wgpu::BindGroup,
     instances: GrowBuffer,
-    count: u32,
 }
 
 impl TextSystem {
@@ -161,15 +160,24 @@ impl TextSystem {
             pipeline,
             atlas_group,
             instances: GrowBuffer::new(device, wgpu::BufferUsages::VERTEX),
-            count: 0,
         }
     }
 
-    /// Rasterizes glyphs not yet in the atlas and uploads this frame's glyph quads.
-    pub fn prepare(&mut self, shaper: &mut Shaper, device: &wgpu::Device, queue: &wgpu::Queue, texts: &[Text], scale: f32) {
+    /// Rasterizes glyphs not yet in the atlas and uploads this frame's glyph quads. Returns, for each
+    /// text in order, the range of glyph instances that draws it.
+    pub fn prepare<'a>(
+        &mut self,
+        shaper: &mut Shaper,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texts: impl Iterator<Item = &'a Text>,
+        scale: f32,
+    ) -> Vec<std::ops::Range<u32>> {
         let mut out: Vec<GlyphInstance> = Vec::new();
+        let mut ranges = Vec::new();
 
         for text in texts {
+            let first = out.len() as u32;
             let (buffer, font_system) = shaper.buffer_and_fonts(&text.content, text.size);
             for run in buffer.layout_runs() {
                 // The baseline sits on a whole device pixel so glyphs stay crisp.
@@ -190,21 +198,23 @@ impl TextSystem {
                     });
                 }
             }
+            ranges.push(first..out.len() as u32);
         }
 
-        self.count = out.len() as u32;
         self.instances.write(device, queue, bytemuck::cast_slice(&out));
+        ranges
     }
 
-    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, globals: &wgpu::BindGroup) {
-        if self.count == 0 {
+    /// Draws the glyph instances in `range` (as returned by [`TextSystem::prepare`]).
+    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, globals: &wgpu::BindGroup, range: std::ops::Range<u32>) {
+        if range.is_empty() {
             return;
         }
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, globals, &[]);
         pass.set_bind_group(1, &self.atlas_group, &[]);
         pass.set_vertex_buffer(0, self.instances.buffer.slice(..));
-        pass.draw(0..6, 0..self.count);
+        pass.draw(0..6, range);
     }
 }
 

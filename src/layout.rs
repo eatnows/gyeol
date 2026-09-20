@@ -23,7 +23,7 @@ pub(crate) struct Node<S> {
     hover_background: Option<Color>,
     border_width: f32,
     border_color: Color,
-    radius: f32,
+    radii: [f32; 4],
     text: Option<(String, f32, Color)>,
     cursor: Cursor,
     on_click: Option<Handler<S>>,
@@ -104,14 +104,14 @@ pub(crate) fn layout_and_paint<S>(
     for (i, node) in laid.nodes.iter().enumerate() {
         let fill = if hovered.contains(&i) { node.hover_background.or(node.background) } else { node.background };
         if fill.is_some() || node.border_width > 0. {
-            let mut quad = Quad::new(node.bounds, fill.unwrap_or(Color::TRANSPARENT)).rounded(node.radius);
+            let mut quad = Quad::new(node.bounds, fill.unwrap_or(Color::TRANSPARENT)).rounded_corners(node.radii);
             if node.border_width > 0. {
                 quad = quad.bordered(node.border_width, node.border_color);
             }
-            scene.quads.push(quad);
+            scene.push_quad(quad);
         }
         if let Some((content, size, color)) = &node.text {
-            scene.texts.push(Text::new((node.bounds.x, node.bounds.y), content.clone(), *size, *color));
+            scene.push_text(Text::new((node.bounds.x, node.bounds.y), content.clone(), *size, *color));
         }
     }
     (laid, scene)
@@ -138,7 +138,7 @@ fn build<S>(
         hover_background: style.hover_background,
         border_width: style.border_width,
         border_color: style.border_color,
-        radius: style.radius,
+        radii: style.radii,
         text: None,
         cursor: style.cursor,
         on_click,
@@ -277,8 +277,8 @@ mod tests {
         let root = div().border(2., Color::hex(0)).child(div().h(10.));
         let (laid, scene) = lay(root, &mut shaper);
         assert_eq!(b(&laid, 1), (2., 2., 396., 10.));
-        assert_eq!(scene.quads.len(), 1, "only the bordered element paints a quad");
-        assert_eq!(scene.quads[0].border_width, 2.);
+        assert_eq!(scene.quads().count(), 1, "only the bordered element paints a quad");
+        assert_eq!(scene.quads().next().unwrap().border_width, 2.);
     }
 
     #[test]
@@ -289,8 +289,8 @@ mod tests {
         let (_, _, w, h) = b(&laid, 1);
         assert!((w - shaper.width("Hello 결", 20.)).abs() <= 1., "layout rounds to whole pixels: {w}");
         assert_eq!(h, Shaper::line_height(20.));
-        assert_eq!(scene.texts.len(), 1);
-        assert_eq!(scene.texts[0].size, 20., "size is inherited from the container");
+        assert_eq!(scene.texts().count(), 1);
+        assert_eq!(scene.texts().next().unwrap().size, 20., "size is inherited from the container");
     }
 
     #[test]
@@ -300,8 +300,8 @@ mod tests {
         let blue = Color::hex(0x0000ff);
         let root = div().text_color(red).child(text("a")).child(text("b").text_color(blue));
         let (_, scene) = lay(root, &mut shaper);
-        assert_eq!(scene.texts[0].color, red);
-        assert_eq!(scene.texts[1].color, blue);
+        let colors: Vec<Color> = scene.texts().map(|t| t.color).collect();
+        assert_eq!(colors, vec![red, blue]);
     }
 
     #[test]
@@ -317,15 +317,16 @@ mod tests {
         };
 
         let (laid, scene) = layout_and_paint(build(), SIZE, (50., 25.), Color::hex(0xffffff), &mut shaper);
-        assert_eq!(scene.quads.len(), 2);
-        assert_eq!(scene.quads[0].background, hot, "the pointer is over the first box");
-        assert_eq!(scene.quads[1].background, idle);
+        let quads: Vec<&Quad> = scene.quads().collect();
+        assert_eq!(quads.len(), 2);
+        assert_eq!(quads[0].background, hot, "the pointer is over the first box");
+        assert_eq!(quads[1].background, idle);
         assert_eq!(laid.click_target((5., 5.)), Some(1), "a click on the inner child bubbles up to the handler");
         assert_eq!(laid.click_target((150., 25.)), None, "the second box has no handler");
         assert_eq!(laid.cursor_at((50., 25.)), Cursor::Pointer);
         assert_eq!(laid.cursor_at((150., 25.)), Cursor::Default);
 
         let (_, away) = layout_and_paint(build(), SIZE, (350., 200.), Color::hex(0xffffff), &mut shaper);
-        assert_eq!(away.quads[0].background, idle, "no hover when the pointer is elsewhere");
+        assert_eq!(away.quads().next().unwrap().background, idle, "no hover when the pointer is elsewhere");
     }
 }

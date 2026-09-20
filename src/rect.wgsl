@@ -10,7 +10,8 @@ struct Instance {
     @location(1) size: vec2<f32>,
     @location(2) background: vec4<f32>,
     @location(3) border_color: vec4<f32>,
-    @location(4) params: vec2<f32>, // border width, corner radius
+    @location(4) radii: vec4<f32>, // top-left, top-right, bottom-right, bottom-left
+    @location(5) border_width: f32,
 };
 
 struct VsOut {
@@ -19,7 +20,8 @@ struct VsOut {
     @location(1) size: vec2<f32>,
     @location(2) background: vec4<f32>,
     @location(3) border_color: vec4<f32>,
-    @location(4) params: vec2<f32>,
+    @location(4) radii: vec4<f32>,
+    @location(5) border_width: f32,
 };
 
 @vertex
@@ -36,7 +38,8 @@ fn vs_main(@builtin(vertex_index) index: u32, inst: Instance) -> VsOut {
     out.size = inst.size;
     out.background = inst.background;
     out.border_color = inst.border_color;
-    out.params = inst.params;
+    out.radii = inst.radii;
+    out.border_width = inst.border_width;
     return out;
 }
 
@@ -49,10 +52,15 @@ fn sd_round_box(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let half_size = in.size * 0.5;
-    let radius = min(in.params.y, min(half_size.x, half_size.y));
+    // Pick the corner radius of the quadrant the pixel is in (y grows downwards).
+    var radius = in.radii.x;
+    if in.local.x >= 0.0 && in.local.y < 0.0 { radius = in.radii.y; }
+    if in.local.x >= 0.0 && in.local.y >= 0.0 { radius = in.radii.z; }
+    if in.local.x < 0.0 && in.local.y >= 0.0 { radius = in.radii.w; }
+    radius = min(radius, min(half_size.x, half_size.y));
     let d = sd_round_box(in.local, half_size, radius);
     let outer = clamp(0.5 - d, 0.0, 1.0);
-    let inner = clamp(0.5 - (d + in.params.x), 0.0, 1.0);
+    let inner = clamp(0.5 - (d + in.border_width), 0.0, 1.0);
     let ring = outer - inner;
     // Premultiplied output: fill inside the border, border color on the ring.
     let fill = in.background.rgb * in.background.a * inner;

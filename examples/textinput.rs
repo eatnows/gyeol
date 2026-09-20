@@ -296,8 +296,8 @@ impl gyeol::App for Demo {
         let line_h = Shaper::line_height(SIZE);
         let mut scene = Scene { background: Some(BG), ..Default::default() };
 
-        scene.texts.push(Text::new((40., 40.), "gyeol  결", 30., INK));
-        scene.texts.push(Text::new((40., 84.), "Click a field and type. Korean composes with the system input method.", 14., DIM));
+        scene.push_text(Text::new((40., 40.), "gyeol  결", 30., INK));
+        scene.push_text(Text::new((40., 84.), "Click a field and type. Korean composes with the system input method.", 14., DIM));
 
         let blink_on = (self.blink_epoch.elapsed().as_millis() / BLINK.as_millis()) % 2 == 0;
         let to_next_blink = BLINK.as_millis() - self.blink_epoch.elapsed().as_millis() % BLINK.as_millis();
@@ -305,9 +305,9 @@ impl gyeol::App for Demo {
         for (i, field) in self.fields.iter().enumerate() {
             let focused = self.focus == Some(i);
             let r = field.rect;
-            scene.texts.push(Text::new((r.x, r.y - 22.), field.label, 13., DIM));
+            scene.push_text(Text::new((r.x, r.y - 22.), field.label, 13., DIM));
             let border = if focused { ACCENT } else { LINE };
-            scene.quads.push(Quad::new(r, SURFACE).rounded(8.).bordered(if focused { 2. } else { 1. }, border));
+            scene.push_quad(Quad::new(r, SURFACE).rounded(8.).bordered(if focused { 2. } else { 1. }, border));
 
             let tx = Self::text_x(field);
             let ty = r.y + (r.h - line_h) / 2.;
@@ -321,20 +321,20 @@ impl gyeol::App for Demo {
             if focused && !composing && sel_a != sel_b {
                 let x0 = cx.shaper.caret_x(&field.text, SIZE, sel_a);
                 let x1 = cx.shaper.caret_x(&field.text, SIZE, sel_b);
-                scene.quads.push(Quad::new(Rect::new(tx + x0, ty, x1 - x0, line_h), ACCENT.with_alpha(0.22)).rounded(2.));
+                scene.push_quad(Quad::new(Rect::new(tx + x0, ty, x1 - x0, line_h), ACCENT.with_alpha(0.22)).rounded(2.));
             }
-            scene.texts.push(Text::new((tx, ty), shown.clone(), SIZE, INK));
+            scene.push_text(Text::new((tx, ty), shown.clone(), SIZE, INK));
 
             let caret_byte = field.caret + field.preedit.len();
             let caret_x = tx + cx.shaper.caret_x(&shown, SIZE, caret_byte);
             if composing && focused {
                 let x0 = tx + cx.shaper.caret_x(&shown, SIZE, field.caret);
-                scene.quads.push(Quad::new(Rect::new(x0, ty + line_h - 3., caret_x - x0, 1.5), INK));
+                scene.push_quad(Quad::new(Rect::new(x0, ty + line_h - 3., caret_x - x0, 1.5), INK));
             }
             if focused {
                 cx.set_ime_cursor_area(Rect::new(caret_x, ty, 1., line_h));
                 if blink_on && self.window_focused && (composing || sel_a == sel_b) {
-                    scene.quads.push(Quad::new(Rect::new(caret_x, ty + 2., 1.5, line_h - 4.), INK));
+                    scene.push_quad(Quad::new(Rect::new(caret_x, ty + 2., 1.5, line_h - 4.), INK));
                 }
             }
         }
@@ -352,9 +352,9 @@ impl gyeol::App for Demo {
             format!("keys    {}", if mods.is_empty() { "-".to_string() } else { mods }),
             format!("focus   {}   window {}", self.focus.map_or("none", |i| self.fields[i].label), if self.window_focused { "active" } else { "inactive" }),
         ];
-        scene.quads.push(Quad::new(Rect::new(40., h - 140., w - 80., 100.), SURFACE).rounded(8.).bordered(1., LINE));
+        scene.push_quad(Quad::new(Rect::new(40., h - 140., w - 80., 100.), SURFACE).rounded(8.).bordered(1., LINE));
         for (i, line) in info.into_iter().enumerate() {
-            scene.texts.push(Text::new((56., h - 130. + i as f32 * 22.), line, 13., DIM));
+            scene.push_text(Text::new((56., h - 130. + i as f32 * 22.), line, 13., DIM));
         }
 
         if self.focus.is_some() && self.window_focused {
