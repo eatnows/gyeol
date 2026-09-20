@@ -48,7 +48,20 @@ pub fn uniform_list<S>(
 ) -> Element<S> {
     let id = ElementId::new(id);
     let range = cx.visible_rows(id, count, row_height);
-    let rows = range.clone().map(|i| row(i).h(row_height));
+    list_rows(id, count, row_height, range.clone(), range.map(|i| row(i)))
+}
+
+/// The scroll container of a `count`-row list whose visible rows (`range`, from
+/// [`Cx::visible_rows`]) were built by the caller. Use it instead of [`uniform_list`] when building
+/// the rows needs `cx` itself (for example to measure text).
+pub fn list_rows<S>(
+    id: impl Hash,
+    count: usize,
+    row_height: f32,
+    range: Range<usize>,
+    rows: impl IntoIterator<Item = Element<S>>,
+) -> Element<S> {
+    let rows = rows.into_iter().map(|row| row.h(row_height));
     div()
         .id(id)
         .overflow_y_scroll()
