@@ -81,13 +81,13 @@ impl Renderer {
         surface.configure(&device, &config);
 
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("gyui globals"),
+            label: Some("gyeol globals"),
             size: std::mem::size_of::<Globals>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("gyui globals layout"),
+            label: Some("gyeol globals layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX,
@@ -100,7 +100,7 @@ impl Renderer {
             }],
         });
         let globals_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("gyui globals group"),
+            label: Some("gyeol globals group"),
             layout: &globals_layout,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() }],
         });
@@ -162,10 +162,10 @@ impl Renderer {
             b: c.b as f64,
             a: c.a as f64,
         });
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gyui frame") });
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gyeol frame") });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("gyui pass"),
+                label: Some("gyeol pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,
@@ -196,16 +196,16 @@ fn create_quad_pipeline(
     globals_layout: &wgpu::BindGroupLayout,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("gyui rect shader"),
+        label: Some("gyeol rect shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("rect.wgsl").into()),
     });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("gyui rect layout"),
+        label: Some("gyeol rect layout"),
         bind_group_layouts: &[Some(globals_layout)],
         immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("gyui rect pipeline"),
+        label: Some("gyeol rect pipeline"),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &shader,

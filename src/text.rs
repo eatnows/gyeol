@@ -71,7 +71,7 @@ pub(crate) struct TextSystem {
 impl TextSystem {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, globals_layout: &wgpu::BindGroupLayout) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("gyui glyph atlas"),
+            label: Some("gyeol glyph atlas"),
             size: wgpu::Extent3d { width: ATLAS_SIZE, height: ATLAS_SIZE, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
@@ -88,7 +88,7 @@ impl TextSystem {
             ..Default::default()
         });
         let atlas_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("gyui atlas layout"),
+            label: Some("gyeol atlas layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -109,7 +109,7 @@ impl TextSystem {
             ],
         });
         let atlas_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("gyui atlas group"),
+            label: Some("gyeol atlas group"),
             layout: &atlas_layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
@@ -118,16 +118,16 @@ impl TextSystem {
         });
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("gyui text shader"),
+            label: Some("gyeol text shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("text.wgsl").into()),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("gyui text layout"),
+            label: Some("gyeol text layout"),
             bind_group_layouts: &[Some(globals_layout), Some(&atlas_layout)],
             immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("gyui text pipeline"),
+            label: Some("gyeol text pipeline"),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &shader,

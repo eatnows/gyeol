@@ -1,4 +1,4 @@
-# gyui
+# gyeol
 
 결 (*gyeol*) — a native UI toolkit for Rust, written from scratch on
 [winit](https://github.com/rust-windowing/winit), [wgpu](https://wgpu.rs) and

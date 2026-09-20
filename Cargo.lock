@@ -604,7 +604,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gyui"
+name = "gyeol"
 version = "0.0.1"
 dependencies = [
  "bytemuck",
