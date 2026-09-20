@@ -1,16 +1,21 @@
 //! **gyeol** (결): a native UI toolkit for Rust, written from scratch on winit, wgpu and cosmic-text.
 //!
-//! Early days: the pieces so far are a renderer-agnostic [`Scene`], a wgpu [`Renderer`] and a
-//! [`shell`] that opens a window and runs an [`App`].
+//! Early days: a renderer-agnostic [`Scene`], a wgpu [`Renderer`], a [`Shaper`] for measuring text,
+//! input [`Event`]s (including input-method composition for Korean and friends), and a [`shell`]
+//! that opens a window and runs an [`App`].
 
 mod error;
+pub mod event;
 mod gpu;
 pub mod renderer;
 pub mod scene;
+pub mod shaper;
 pub mod shell;
 mod text;
 
 pub use error::{Error, Result};
+pub use event::{Event, Ime, Key, Modifiers, MouseButton, NamedKey, ScrollDelta};
 pub use renderer::Renderer;
 pub use scene::{Color, Quad, Rect, Scene, Text};
-pub use shell::{run, App, Frame};
+pub use shaper::Shaper;
+pub use shell::{run, App, Cx};

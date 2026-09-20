@@ -8,6 +8,7 @@ use crate::{
     error::{err, Error, Result},
     gpu::{Globals, GrowBuffer},
     scene::{Quad, Scene},
+    shaper::Shaper,
     text::TextSystem,
 };
 
@@ -138,7 +139,7 @@ impl Renderer {
         (self.config.width as f32 / self.scale_factor, self.config.height as f32 / self.scale_factor)
     }
 
-    pub fn render(&mut self, scene: &Scene) {
+    pub fn render(&mut self, scene: &Scene, shaper: &mut Shaper) {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
@@ -154,7 +155,7 @@ impl Renderer {
         let quads: Vec<QuadInstance> = scene.quads.iter().map(QuadInstance::from).collect();
         self.quad_instances.write(&self.device, &self.queue, bytemuck::cast_slice(&quads));
 
-        self.text.prepare(&self.device, &self.queue, &scene.texts, self.scale_factor);
+        self.text.prepare(shaper, &self.device, &self.queue, &scene.texts, self.scale_factor);
 
         let clear = scene.background.map_or(wgpu::Color::BLACK, |c| wgpu::Color {
             r: c.r as f64,

@@ -1,11 +1,11 @@
 //! Phase 0: a window with rounded rectangles.
-use gyeol::{Color, Frame, Quad, Rect, Scene, Text};
+use gyeol::{Color, Cx, Quad, Rect, Scene, Text};
 
 struct Hello;
 
 impl gyeol::App for Hello {
-    fn scene(&mut self, frame: Frame) -> Scene {
-        let (w, h) = frame.size;
+    fn scene(&mut self, cx: &mut Cx) -> Scene {
+        let (w, h) = cx.size();
         let mut scene = Scene { background: Some(Color::hex(0xf3f5f7)), ..Default::default() };
         scene.quads.push(Quad::new(Rect::new(40., 40., w - 80., 120.), Color::hex(0xffffff)).rounded(12.).bordered(1., Color::hex(0xdce2e8)));
         scene.quads.push(Quad::new(Rect::new(40., 190., 200., 64.), Color::hex(0xb45f06)).rounded(8.));

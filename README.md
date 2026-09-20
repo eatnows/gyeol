@@ -7,7 +7,9 @@
 Work in progress; nothing here is stable or published yet.
 
 ```sh
-cargo run --example hello
+cargo run --example hello        # rounded rectangles and text
+cargo run --example textinput    # text fields: mouse, keyboard, Korean IME composition
+cargo test --lib --examples
 ```
 
 ## License

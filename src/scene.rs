@@ -46,6 +46,10 @@ impl Rect {
     pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Rect {
         Rect { x, y, w, h }
     }
+
+    pub fn contains(&self, pos: (f32, f32)) -> bool {
+        pos.0 >= self.x && pos.0 < self.x + self.w && pos.1 >= self.y && pos.1 < self.y + self.h
+    }
 }
 
 /// A filled rectangle with optional rounded corners and border.

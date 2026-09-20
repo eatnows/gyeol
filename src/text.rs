@@ -2,9 +2,9 @@
 use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
-use cosmic_text::{Attrs, Buffer, CacheKey, FontSystem, Metrics, Shaping, SwashCache, SwashContent};
+use cosmic_text::{CacheKey, FontSystem, SwashCache, SwashContent};
 
-use crate::{gpu::GrowBuffer, scene::Text};
+use crate::{gpu::GrowBuffer, scene::Text, shaper::Shaper};
 
 const ATLAS_SIZE: u32 = 2048;
 
@@ -55,11 +55,7 @@ impl Atlas {
 }
 
 pub(crate) struct TextSystem {
-    font_system: FontSystem,
     swash: SwashCache,
-    /// Shaped text, kept while it keeps being drawn; the number is the last frame that used it.
-    shaped: HashMap<(String, u32), (Buffer, u64)>,
-    frame: u64,
     atlas: Atlas,
     glyphs: HashMap<CacheKey, Option<GlyphSlot>>,
     pipeline: wgpu::RenderPipeline,
@@ -159,10 +155,7 @@ impl TextSystem {
         });
 
         TextSystem {
-            font_system: FontSystem::new(),
             swash: SwashCache::new(),
-            shaped: HashMap::new(),
-            frame: 0,
             atlas: Atlas { texture, x: 0, y: 0, row_height: 0 },
             glyphs: HashMap::new(),
             pipeline,
@@ -172,34 +165,20 @@ impl TextSystem {
         }
     }
 
-    /// Shapes `texts`, rasterizes glyphs not yet in the atlas, and uploads this frame's glyph quads.
-    pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, texts: &[Text], scale: f32) {
-        self.frame += 1;
+    /// Rasterizes glyphs not yet in the atlas and uploads this frame's glyph quads.
+    pub fn prepare(&mut self, shaper: &mut Shaper, device: &wgpu::Device, queue: &wgpu::Queue, texts: &[Text], scale: f32) {
         let mut out: Vec<GlyphInstance> = Vec::new();
 
         for text in texts {
-            let (buffer, last_used) = self.shaped.entry((text.content.clone(), text.size.to_bits())).or_insert_with(|| {
-                let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(text.size, (text.size * 1.4).round()));
-                buffer.set_size(None, None);
-                buffer.set_text(&text.content, &Attrs::new(), Shaping::Advanced, None);
-                buffer.shape_until_scroll(&mut self.font_system, false);
-                (buffer, 0)
-            });
-            *last_used = self.frame;
-
+            let (buffer, font_system) = shaper.buffer_and_fonts(&text.content, text.size);
             for run in buffer.layout_runs() {
                 // The baseline sits on a whole device pixel so glyphs stay crisp.
                 let baseline = ((text.origin.1 + run.line_y) * scale).round();
                 for glyph in run.glyphs {
                     let physical = glyph.physical((text.origin.0 * scale, baseline), scale);
-                    let Some(slot) = slot_for(
-                        physical.cache_key,
-                        &mut self.glyphs,
-                        &mut self.swash,
-                        &mut self.font_system,
-                        &mut self.atlas,
-                        queue,
-                    ) else {
+                    let Some(slot) =
+                        slot_for(physical.cache_key, &mut self.glyphs, &mut self.swash, font_system, &mut self.atlas, queue)
+                    else {
                         continue;
                     };
                     out.push(GlyphInstance {
@@ -213,8 +192,6 @@ impl TextSystem {
             }
         }
 
-        let frame = self.frame;
-        self.shaped.retain(|_, (_, last_used)| *last_used == frame);
         self.count = out.len() as u32;
         self.instances.write(device, queue, bytemuck::cast_slice(&out));
     }
