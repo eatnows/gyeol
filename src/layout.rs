@@ -317,6 +317,11 @@ fn to_taffy(s: &Style) -> taffy::Style {
         Direction::Row => FlexDirection::Row,
         Direction::Column => FlexDirection::Column,
     };
+    if s.absolute {
+        t.position = Position::Absolute;
+    }
+    let inset = |v: Option<f32>| v.map_or(LengthPercentageAuto::auto(), LengthPercentageAuto::length);
+    t.inset = taffy::Rect { top: inset(s.inset[0]), right: inset(s.inset[1]), bottom: inset(s.inset[2]), left: inset(s.inset[3]) };
     t.flex_wrap = if s.wrap { FlexWrap::Wrap } else { FlexWrap::NoWrap };
     t.gap = taffy::Size { width: LengthPercentage::length(s.gap), height: LengthPercentage::length(s.gap) };
     t.padding = edges(s.padding);
@@ -557,5 +562,23 @@ mod tests {
         assert_eq!(count(10, true), (1, true), "drawn after the rows it overlaps");
         assert_eq!(count(2, true), (0, false), "nothing to scroll: no thumb");
         assert_eq!(count(10, false), (0, false), "not asked for");
+    }
+
+    #[test]
+    fn absolute_elements_leave_the_flow_and_sit_relative_to_their_parent() {
+        let mut shaper = Shaper::new();
+        let root = div()
+            .p(10.)
+            .child(div().w(200.).h(100.).child(div().w(50.).h(20.)).child(div().absolute().left(10.).top(20.).w(30.).h(40.))
+                .child(div().absolute().right(5.).bottom(5.).w(30.).h(40.))
+                .child(div().inset(0.)))
+            .child(div().h(10.));
+        let (laid, _) = lay(root, &mut shaper);
+        assert_eq!(b(&laid, 1), (10., 10., 200., 100.));
+        assert_eq!(b(&laid, 2), (10., 10., 50., 20.), "in-flow children ignore the absolute ones");
+        assert_eq!(b(&laid, 3), (20., 30., 30., 40.), "left/top from the parent's corner");
+        assert_eq!(b(&laid, 4), (175., 65., 30., 40.), "right/bottom from the parent's far corner");
+        assert_eq!(b(&laid, 5), (10., 10., 200., 100.), "inset(0) fills the parent");
+        assert_eq!(b(&laid, 6), (10., 110., 380., 10.), "the next sibling sits right below the parent");
     }
 }

@@ -90,6 +90,10 @@ pub enum Cursor {
 pub struct Style {
     pub direction: Direction,
     pub wrap: bool,
+    /// Taken out of the flow and placed by [`Style::inset`] relative to its parent.
+    pub absolute: bool,
+    /// Distances from the parent's edges when `absolute`: top, right, bottom, left.
+    pub inset: [Option<f32>; 4],
     pub gap: f32,
     pub padding: [f32; 4],
     pub margin: [f32; 4],
@@ -130,6 +134,8 @@ impl Default for Style {
         Style {
             direction: Direction::Column,
             wrap: false,
+            absolute: false,
+            inset: [None; 4],
             gap: 0.,
             padding: [0.; 4],
             margin: [0.; 4],
@@ -219,6 +225,41 @@ impl<S> Element<S> {
     }
 
     // ---- layout ----------------------------------------------------------------------------
+
+    /// Takes this element out of its parent's flow and positions it with [`Element::top`],
+    /// [`Element::left`], ... relative to the parent (for overlays, carets, popups). It paints above
+    /// the siblings that come before it.
+    pub fn absolute(mut self) -> Self {
+        self.style.absolute = true;
+        self
+    }
+
+    pub fn top(mut self, px: f32) -> Self {
+        self.style.inset[0] = Some(px);
+        self
+    }
+
+    pub fn right(mut self, px: f32) -> Self {
+        self.style.inset[1] = Some(px);
+        self
+    }
+
+    pub fn bottom(mut self, px: f32) -> Self {
+        self.style.inset[2] = Some(px);
+        self
+    }
+
+    pub fn left(mut self, px: f32) -> Self {
+        self.style.inset[3] = Some(px);
+        self
+    }
+
+    /// Absolute, filling the parent (all four edges at `px`).
+    pub fn inset(mut self, px: f32) -> Self {
+        self.style.absolute = true;
+        self.style.inset = [Some(px); 4];
+        self
+    }
 
     pub fn row(mut self) -> Self {
         self.style.direction = Direction::Row;
