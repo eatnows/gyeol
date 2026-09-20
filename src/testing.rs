@@ -46,6 +46,7 @@ pub struct TestHost<S: View> {
     modifiers: Modifiers,
     wake_at: Option<Instant>,
     scene: Scene,
+    mouse: Option<(f32, f32)>,
 }
 
 impl<S: View> TestHost<S> {
@@ -59,6 +60,7 @@ impl<S: View> TestHost<S> {
             modifiers: Modifiers::default(),
             wake_at: None,
             scene: Scene::default(),
+            mouse: None,
         };
         host.frame();
         host
@@ -122,13 +124,23 @@ impl<S: View> TestHost<S> {
         self.frame()
     }
 
+    /// Moves the pointer to `pos`. Like a real window system, nothing is sent when it is already there.
     pub fn mouse_move(&mut self, pos: (f32, f32)) -> &Scene {
+        if self.mouse == Some(pos) {
+            return &self.scene;
+        }
+        self.mouse = Some(pos);
         self.event(Event::MouseMoved { pos })
     }
 
     pub fn mouse_down(&mut self, pos: (f32, f32)) {
+        self.mouse_down_n(pos, 1);
+    }
+
+    /// Presses the primary button as the `click_count`-th click in a row (2 = double click).
+    pub fn mouse_down_n(&mut self, pos: (f32, f32), click_count: u32) {
         self.mouse_move(pos);
-        self.event(Event::MousePressed { button: MouseButton::Left, pos, click_count: 1 });
+        self.event(Event::MousePressed { button: MouseButton::Left, pos, click_count });
     }
 
     pub fn mouse_up(&mut self, pos: (f32, f32)) {
@@ -341,5 +353,50 @@ mod tests {
         assert!(shown.len() <= 10);
         let last = host.scene().texts().find(|t| t.content == "item 99999").unwrap();
         assert_eq!(last.origin.1, 80., "the last 20px row ends at the bottom of the 100px viewport");
+    }
+
+    #[derive(Default)]
+    struct Pad {
+        log: Vec<String>,
+    }
+
+    impl View for Pad {
+        fn view(&self, _: &mut Cx) -> Element<Self> {
+            let pad = div()
+                .id("pad")
+                .w(100.)
+                .h(100.)
+                .bg(Color::hex(0xdddddd))
+                .on_mouse_down(|s: &mut Pad, _, e| s.log.push(format!("down {:?} n={}", e.local, e.click_count)))
+                .on_drag(|s: &mut Pad, _, e| s.log.push(format!("drag {:?}", e.local)))
+                .on_mouse_up(|s: &mut Pad, _, e| s.log.push(format!("up {:?}", e.local)));
+            let plain = div().w(100.).h(100.).on_mouse_down(|s: &mut Pad, _, _| s.log.push("plain down".into()));
+            div().row().gap(20.).child(div().w(20.).h(20.)).child(pad).child(plain)
+        }
+    }
+
+    #[test]
+    fn a_press_is_captured_by_its_element_until_release_with_local_coordinates() {
+        let mut host = TestHost::new(Pad::default(), (400., 200.));
+        // The pad starts at x = 20 + 20 = 40.
+        host.mouse_down_n((50., 30.), 2);
+        host.mouse_move((90., 40.));
+        host.mouse_move((300., 150.));
+        host.mouse_up((300., 150.));
+        host.mouse_move((60., 60.));
+        assert_eq!(
+            host.state().log,
+            ["down (10.0, 30.0) n=2", "drag (50.0, 40.0)", "drag (260.0, 150.0)", "up (260.0, 150.0)"],
+            "moves outside the pad still reach it while pressed; nothing after the release"
+        );
+    }
+
+    #[test]
+    fn an_element_with_only_a_press_handler_does_not_capture() {
+        let mut host = TestHost::new(Pad::default(), (400., 200.));
+        host.mouse_down((200., 50.));
+        host.mouse_move((50., 50.));
+        host.mouse_up((50., 50.));
+        assert_eq!(host.state().log, ["plain down"], "no drag or release events for it");
     }
 }

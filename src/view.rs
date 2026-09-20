@@ -1,9 +1,9 @@
 //! The high-level way to write an app: implement [`View`] for your state and call [`run_view`].
 use crate::{
-    element::{Cursor, Element},
+    element::{Cursor, Element, MouseEvent},
     error::Result,
     event::{Event, MouseButton, ScrollDelta},
-    layout::{self, Laid, ScrollStore},
+    layout::{self, Capture, Laid, ScrollStore},
     list::ScrollInfo,
     scene::{Color, Scene},
     shell::{run_with, App, Cx, WindowOptions},
@@ -41,31 +41,67 @@ pub(crate) struct Host<S: View> {
     scroll: ScrollStore,
     /// The element a click started on; the click only counts if it also ends there.
     pressed: Option<usize>,
+    /// The element a mouse press is being dragged from.
+    captured: Option<(Capture, MouseButton, u32)>,
 }
 
 impl<S: View> Host<S> {
     pub fn new(state: S) -> Self {
-        Host { state, laid: None, mouse: (0., 0.), scroll: ScrollStore::new(), pressed: None }
+        Host { state, laid: None, mouse: (0., 0.), scroll: ScrollStore::new(), pressed: None, captured: None }
     }
 }
 
 impl<S: View> App for Host<S> {
     fn event(&mut self, event: Event, cx: &mut Cx) {
         let Some(laid) = &self.laid else { return };
+        let modifiers = cx.modifiers;
+        let mouse_event = |i: usize, pos: (f32, f32), button: MouseButton, click_count: u32| {
+            let b = laid.bounds_of(i);
+            MouseEvent { pos, local: (pos.0 - b.x, pos.1 - b.y), button, click_count, modifiers }
+        };
         match event {
             Event::MouseMoved { pos } => {
                 self.mouse = pos;
                 cx.set_cursor(laid.cursor_at(pos));
-            }
-            Event::MousePressed { button: MouseButton::Left, pos, .. } => self.pressed = laid.click_target(pos),
-            Event::MouseReleased { button: MouseButton::Left, pos } => {
-                let target = laid.click_target(pos);
-                if target.is_some() && target == self.pressed {
-                    if let Some(handler) = target.and_then(|i| laid.handler(i)) {
-                        handler(&mut self.state, cx);
+                if let Some((capture, button, click_count)) = self.captured {
+                    if let Some(i) = laid.resolve(capture) {
+                        if let Some(handler) = laid.on_drag(i) {
+                            handler(&mut self.state, cx, mouse_event(i, pos, button, click_count));
+                        }
                     }
                 }
-                self.pressed = None;
+            }
+            Event::MousePressed { button, pos, click_count } => {
+                if button == MouseButton::Left {
+                    self.pressed = laid.click_target(pos);
+                }
+                if let Some(i) = laid.press_target(pos) {
+                    if let Some(handler) = laid.on_mouse_down(i) {
+                        handler(&mut self.state, cx, mouse_event(i, pos, button, click_count));
+                    }
+                    if laid.captures(i) {
+                        self.captured = Some((laid.key_of(i), button, click_count));
+                    }
+                }
+            }
+            Event::MouseReleased { button, pos } => {
+                if let Some((capture, _, click_count)) = self.captured.filter(|(_, b, _)| *b == button) {
+                    self.captured = None;
+                    if let Some(i) = laid.resolve(capture) {
+                        if let Some(handler) = laid.on_mouse_up(i) {
+                            handler(&mut self.state, cx, mouse_event(i, pos, button, click_count));
+                        }
+                    }
+                }
+                if button == MouseButton::Left {
+                    let target = laid.click_target(pos);
+                    if target.is_some() && target == self.pressed {
+                        if let Some(handler) = target.and_then(|i| laid.handler(i)) {
+                            handler(&mut self.state, cx);
+                        }
+                    }
+                    self.pressed = None;
+                }
             }
             Event::Scroll { delta, pos } => {
                 let (dx, dy) = match delta {

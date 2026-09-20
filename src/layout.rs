@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use taffy::{prelude::*, tree::LayoutOutput, TaffyTree};
 
 use crate::{
-    element::{Align, Cursor, Direction, Element, ElementId, Handler, Justify, Kind, Length, Overflow, Style},
+    element::{Align, Cursor, Direction, Element, ElementId, Handler, Justify, Kind, Length, MouseHandler, Overflow, Style},
     scene::{Color, Quad, Rect, Scene, Text},
     shaper::{Shaper, TextStyle},
 };
@@ -45,6 +45,9 @@ pub(crate) struct Node<S> {
     text: Option<(String, TextStyle, Color)>,
     cursor: Cursor,
     on_click: Option<Handler<S>>,
+    on_mouse_down: Option<MouseHandler<S>>,
+    on_drag: Option<MouseHandler<S>>,
+    on_mouse_up: Option<MouseHandler<S>>,
     taffy_id: NodeId,
     // ---- overflow and scrolling
     id: Option<ElementId>,
@@ -69,6 +72,14 @@ impl<S> Node<S> {
     fn scrolls(&self) -> (bool, bool) {
         (self.overflow.0 == Overflow::Scroll, self.overflow.1 == Overflow::Scroll)
     }
+}
+
+/// A reference to an element that outlives one frame's layout.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Capture {
+    Id(ElementId),
+    /// Position in the arena, valid only while the tree keeps the same size.
+    Index(usize, usize),
 }
 
 /// The result of laying out one frame: kept until the next frame so mouse input can be resolved
@@ -96,6 +107,46 @@ impl<S> Laid<S> {
 
     pub fn handler(&self, index: usize) -> Option<&Handler<S>> {
         self.nodes[index].on_click.as_ref()
+    }
+
+    /// The element a press at `pos` goes to: the frontmost one with a mouse-down handler, looking up
+    /// through its ancestors.
+    pub fn press_target(&self, pos: (f32, f32)) -> Option<usize> {
+        self.chain(self.topmost_at(pos)).find(|&i| self.nodes[i].on_mouse_down.is_some())
+    }
+
+    pub fn on_mouse_down(&self, index: usize) -> Option<&MouseHandler<S>> {
+        self.nodes[index].on_mouse_down.as_ref()
+    }
+
+    pub fn on_drag(&self, index: usize) -> Option<&MouseHandler<S>> {
+        self.nodes[index].on_drag.as_ref()
+    }
+
+    pub fn on_mouse_up(&self, index: usize) -> Option<&MouseHandler<S>> {
+        self.nodes[index].on_mouse_up.as_ref()
+    }
+
+    /// Whether a press on `index` should keep receiving mouse moves and the release.
+    pub fn captures(&self, index: usize) -> bool {
+        self.nodes[index].on_drag.is_some() || self.nodes[index].on_mouse_up.is_some()
+    }
+
+    /// How to find `index` again next frame: by its id when it has one, by position otherwise.
+    pub fn key_of(&self, index: usize) -> Capture {
+        self.nodes[index].id.map_or(Capture::Index(index, self.nodes.len()), Capture::Id)
+    }
+
+    /// The element a capture refers to in this frame, if it still exists.
+    pub fn resolve(&self, capture: Capture) -> Option<usize> {
+        match capture {
+            Capture::Id(id) => self.nodes.iter().position(|n| n.id == Some(id)),
+            Capture::Index(i, len) => (len == self.nodes.len()).then_some(i),
+        }
+    }
+
+    pub fn bounds_of(&self, index: usize) -> Rect {
+        self.nodes[index].bounds
     }
 
     /// The cursor to show at `pos`: that of the innermost element that asks for one.
@@ -241,7 +292,7 @@ fn build<S>(
     tree: &mut TaffyTree<TextLeaf>,
     nodes: &mut Vec<Node<S>>,
 ) -> NodeId {
-    let Element { id, style, kind, on_click } = el;
+    let Element { id, style, kind, on_click, on_mouse_down, on_drag, on_mouse_up } = el;
     let mut text_style = inherited.style;
     text_style.size = style.text_size.unwrap_or(text_style.size);
     text_style.family = style.text_family.or(text_style.family);
@@ -264,6 +315,9 @@ fn build<S>(
         text: None,
         cursor: style.cursor,
         on_click,
+        on_mouse_down,
+        on_drag,
+        on_mouse_up,
         taffy_id: NodeId::new(0),
         id,
         overflow: (style.overflow_x, style.overflow_y),

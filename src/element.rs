@@ -5,7 +5,11 @@
 //! frame's tree reflects it.
 use std::hash::{Hash, Hasher};
 
-use crate::{scene::Color, shell::Cx};
+use crate::{
+    event::{Modifiers, MouseButton},
+    scene::Color,
+    shell::Cx,
+};
 
 /// A size along one axis.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -171,6 +175,21 @@ impl Default for Style {
 
 pub type Handler<S> = Box<dyn Fn(&mut S, &mut Cx)>;
 
+/// A mouse press, move or release aimed at an element.
+#[derive(Clone, Copy, Debug)]
+pub struct MouseEvent {
+    /// Position in the window, in logical pixels.
+    pub pos: (f32, f32),
+    /// Position relative to the element's top-left corner (scrolling included).
+    pub local: (f32, f32),
+    pub button: MouseButton,
+    /// 1 for a single click, 2 for a double click, and so on.
+    pub click_count: u32,
+    pub modifiers: Modifiers,
+}
+
+pub type MouseHandler<S> = Box<dyn Fn(&mut S, &mut Cx, MouseEvent)>;
+
 pub(crate) enum Kind<S> {
     Div(Vec<Element<S>>),
     Text(String),
@@ -182,16 +201,19 @@ pub struct Element<S> {
     pub(crate) style: Style,
     pub(crate) kind: Kind<S>,
     pub(crate) on_click: Option<Handler<S>>,
+    pub(crate) on_mouse_down: Option<MouseHandler<S>>,
+    pub(crate) on_drag: Option<MouseHandler<S>>,
+    pub(crate) on_mouse_up: Option<MouseHandler<S>>,
 }
 
 /// A container. Children stack vertically; call [`Element::row`] for a horizontal row.
 pub fn div<S>() -> Element<S> {
-    Element { id: None, style: Style::default(), kind: Kind::Div(Vec::new()), on_click: None }
+    Element { id: None, style: Style::default(), kind: Kind::Div(Vec::new()), on_click: None, on_mouse_down: None, on_drag: None, on_mouse_up: None }
 }
 
 /// A single line of text, in the size and color inherited from its parents.
 pub fn text<S>(content: impl Into<String>) -> Element<S> {
-    Element { id: None, style: Style::default(), kind: Kind::Text(content.into()), on_click: None }
+    Element { id: None, style: Style::default(), kind: Kind::Text(content.into()), on_click: None, on_mouse_down: None, on_drag: None, on_mouse_up: None }
 }
 
 impl<S> Element<S> {
@@ -221,6 +243,27 @@ impl<S> Element<S> {
     pub fn on_click(mut self, handler: impl Fn(&mut S, &mut Cx) + 'static) -> Self {
         self.on_click = Some(Box::new(handler));
         self.style.cursor = Cursor::Pointer;
+        self
+    }
+
+    /// Called when a mouse button goes down over this element (or a descendant without a handler of
+    /// its own). If the element also has [`Element::on_drag`] or [`Element::on_mouse_up`], it then
+    /// receives the mouse until the button is released, even outside its bounds. Such elements need
+    /// an [`Element::id`] so the drag survives the tree being rebuilt each frame.
+    pub fn on_mouse_down(mut self, handler: impl Fn(&mut S, &mut Cx, MouseEvent) + 'static) -> Self {
+        self.on_mouse_down = Some(Box::new(handler));
+        self
+    }
+
+    /// Called for every mouse move while a press that started on this element is held.
+    pub fn on_drag(mut self, handler: impl Fn(&mut S, &mut Cx, MouseEvent) + 'static) -> Self {
+        self.on_drag = Some(Box::new(handler));
+        self
+    }
+
+    /// Called when the button of a press that started on this element is released.
+    pub fn on_mouse_up(mut self, handler: impl Fn(&mut S, &mut Cx, MouseEvent) + 'static) -> Self {
+        self.on_mouse_up = Some(Box::new(handler));
         self
     }
 
