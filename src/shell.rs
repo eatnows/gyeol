@@ -21,6 +21,29 @@ use crate::{
     shaper::Shaper,
 };
 
+/// What the window offers an app. The shell implements it on a real window; tests use a recorder.
+pub trait Platform {
+    fn set_ime_allowed(&self, allowed: bool);
+    fn set_ime_cursor_area(&self, area: Rect);
+    fn set_cursor(&self, cursor: crate::element::Cursor);
+}
+
+struct WindowPlatform<'a>(&'a Window);
+
+impl Platform for WindowPlatform<'_> {
+    fn set_ime_allowed(&self, allowed: bool) {
+        self.0.set_ime_allowed(allowed);
+    }
+
+    fn set_ime_cursor_area(&self, area: Rect) {
+        self.0.set_ime_cursor_area(LogicalPosition::new(area.x, area.y), LogicalSize::new(area.w, area.h));
+    }
+
+    fn set_cursor(&self, cursor: crate::element::Cursor) {
+        self.0.set_cursor(winit::window::CursorIcon::from(cursor));
+    }
+}
+
 /// What an [`App`] can see and ask for while it handles an event or paints a frame.
 pub struct Cx<'a> {
     /// Measures text with the same fonts the renderer draws with.
@@ -29,11 +52,22 @@ pub struct Cx<'a> {
     pub modifiers: Modifiers,
     size: (f32, f32),
     scale_factor: f32,
-    window: &'a Window,
+    platform: &'a dyn Platform,
     wake_at: &'a mut Option<Instant>,
 }
 
-impl Cx<'_> {
+impl<'a> Cx<'a> {
+    pub(crate) fn new(
+        shaper: &'a mut Shaper,
+        modifiers: Modifiers,
+        size: (f32, f32),
+        scale_factor: f32,
+        platform: &'a dyn Platform,
+        wake_at: &'a mut Option<Instant>,
+    ) -> Self {
+        Cx { shaper, modifiers, size, scale_factor, platform, wake_at }
+    }
+
     /// The drawable area in logical pixels.
     pub fn size(&self) -> (f32, f32) {
         self.size
@@ -51,17 +85,17 @@ impl Cx<'_> {
 
     /// Turns input-method (IME) support on or off. Text fields want it on.
     pub fn set_ime_allowed(&self, allowed: bool) {
-        self.window.set_ime_allowed(allowed);
+        self.platform.set_ime_allowed(allowed);
     }
 
     /// Sets the mouse cursor shown over the window.
     pub fn set_cursor(&self, cursor: crate::element::Cursor) {
-        self.window.set_cursor(winit::window::CursorIcon::from(cursor));
+        self.platform.set_cursor(cursor);
     }
 
     /// Tells the input method where the caret is, so its candidate window appears next to it.
     pub fn set_ime_cursor_area(&self, area: Rect) {
-        self.window.set_ime_cursor_area(LogicalPosition::new(area.x, area.y), LogicalSize::new(area.w, area.h));
+        self.platform.set_ime_cursor_area(area);
     }
 }
 
@@ -117,14 +151,8 @@ impl<A: App> Shell<A> {
     /// Hands `event` to the app, then draws a new frame.
     fn dispatch(&mut self, event: Event) {
         let (Some(window), Some(renderer)) = (self.window.as_ref(), self.renderer.as_ref()) else { return };
-        let mut cx = Cx {
-            shaper: &mut self.shaper,
-            modifiers: self.modifiers,
-            size: renderer.logical_size(),
-            scale_factor: window.scale_factor() as f32,
-            window,
-            wake_at: &mut self.wake_at,
-        };
+        let platform = WindowPlatform(window);
+        let mut cx = Cx::new(&mut self.shaper, self.modifiers, renderer.logical_size(), window.scale_factor() as f32, &platform, &mut self.wake_at);
         self.app.event(event, &mut cx);
         window.request_redraw();
     }
@@ -188,14 +216,8 @@ impl<A: App> ApplicationHandler for Shell<A> {
             }
             WindowEvent::RedrawRequested => {
                 self.shaper.begin_frame();
-                let mut cx = Cx {
-                    shaper: &mut self.shaper,
-                    modifiers: self.modifiers,
-                    size: renderer.logical_size(),
-                    scale_factor: scale,
-                    window: &window,
-                    wake_at: &mut self.wake_at,
-                };
+                let platform = WindowPlatform(&window);
+                let mut cx = Cx::new(&mut self.shaper, self.modifiers, renderer.logical_size(), scale, &platform, &mut self.wake_at);
                 let scene = self.app.scene(&mut cx);
                 renderer.render(&scene, &mut self.shaper);
                 self.shaper.end_frame();

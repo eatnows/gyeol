@@ -21,16 +21,22 @@ pub trait View: Sized + 'static {
 
 /// Opens a window titled `title` showing `state`'s [`View`] until it is closed.
 pub fn run_view<S: View>(title: &str, state: S) -> Result<()> {
-    run(title, Host { state, laid: None, mouse: (0., 0.), pressed: None })
+    run(title, Host::new(state))
 }
 
-struct Host<S: View> {
-    state: S,
+pub(crate) struct Host<S: View> {
+    pub state: S,
     /// The last frame's layout, which mouse events are resolved against.
     laid: Option<Laid<S>>,
     mouse: (f32, f32),
     /// The element a click started on; the click only counts if it also ends there.
     pressed: Option<usize>,
+}
+
+impl<S: View> Host<S> {
+    pub fn new(state: S) -> Self {
+        Host { state, laid: None, mouse: (0., 0.), pressed: None }
+    }
 }
 
 impl<S: View> App for Host<S> {

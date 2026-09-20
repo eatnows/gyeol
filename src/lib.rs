@@ -13,6 +13,7 @@ pub mod renderer;
 pub mod scene;
 pub mod shaper;
 pub mod shell;
+pub mod testing;
 mod text;
 pub mod view;
 
@@ -22,5 +23,5 @@ pub use event::{Event, Ime, Key, Modifiers, MouseButton, NamedKey, ScrollDelta};
 pub use renderer::Renderer;
 pub use scene::{Color, Quad, Rect, Scene, Text};
 pub use shaper::Shaper;
-pub use shell::{run, App, Cx};
+pub use shell::{run, App, Cx, Platform};
 pub use view::{run_view, View};

@@ -261,3 +261,65 @@ fn main() {
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gyeol::testing::TestHost;
+
+    fn app() -> TestHost<Settings> {
+        TestHost::new(Settings { open: true, tab: Tab::General, theme: Theme::Light, font_size: 15 }, (900., 600.))
+    }
+
+    fn has_text(host: &TestHost<Settings>, content: &str) -> bool {
+        host.scene().texts().any(|t| t.content == content)
+    }
+
+    #[test]
+    fn the_theme_buttons_switch_the_palette() {
+        let mut host = app();
+        let light = host.scene().background;
+        host.click_text("Dark");
+        assert!(host.state().theme == Theme::Dark);
+        assert_ne!(host.scene().background, light, "the whole window repaints in the new palette");
+        host.click_text("Light");
+        assert_eq!(host.scene().background, light);
+    }
+
+    #[test]
+    fn tabs_switch_the_page() {
+        let mut host = app();
+        assert!(has_text(&host, "Theme") && !has_text(&host, "Font size"));
+        host.click_text("Editor");
+        assert!(has_text(&host, "Font size") && !has_text(&host, "Theme"));
+        host.click_text("General");
+        assert!(has_text(&host, "Theme"));
+    }
+
+    #[test]
+    fn the_font_size_stepper_stays_in_range() {
+        let mut host = app();
+        host.click_text("Editor");
+        host.click_text("+");
+        host.click_text("+");
+        assert_eq!(host.state().font_size, 17);
+        assert!(has_text(&host, "17"));
+        for _ in 0..30 {
+            host.click_text("+");
+        }
+        assert_eq!(host.state().font_size, 24, "clamped at the maximum");
+        for _ in 0..30 {
+            host.click_text("−");
+        }
+        assert_eq!(host.state().font_size, 10, "clamped at the minimum");
+    }
+
+    #[test]
+    fn closing_and_reopening() {
+        let mut host = app();
+        host.click_text("×");
+        assert!(!host.state().open);
+        host.click_text("Open settings");
+        assert!(host.state().open);
+    }
+}
