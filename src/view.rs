@@ -17,6 +17,10 @@ pub trait View: Sized + 'static {
     /// Describes the UI for the current state. Called once per frame.
     fn view(&self, cx: &mut Cx) -> Element<Self>;
 
+    /// Called for every input event after the elements' own handlers have had their say. This is
+    /// where keyboard and input-method events arrive; the app decides which widget they belong to.
+    fn event(&mut self, _event: &Event, _cx: &mut Cx) {}
+
     /// The window's background color, behind everything.
     fn background(&self) -> Color {
         Color::hex(0xffffff)
@@ -46,6 +50,33 @@ pub(crate) struct Host<S: View> {
 }
 
 impl<S: View> Host<S> {
+    /// Scroll positions and viewport sizes, for the app to build only what is visible and to reveal things.
+    fn scroll_snapshot(&self) -> std::collections::HashMap<crate::element::ElementId, ScrollInfo> {
+        let Some(laid) = &self.laid else { return Default::default() };
+        laid.viewports()
+            .map(|(id, viewport)| (id, ScrollInfo { offset: self.scroll.get(&id).copied().unwrap_or_default(), viewport }))
+            .collect()
+    }
+
+    pub fn scroll_offset(&self, id: crate::element::ElementId) -> (f32, f32) {
+        self.scroll.get(&id).copied().unwrap_or_default()
+    }
+
+    /// Scrolls containers so the regions the app asked to reveal are visible.
+    fn apply_reveals(&mut self, reveals: Vec<(crate::element::ElementId, crate::scene::Rect)>) {
+        let Some(laid) = &self.laid else { return };
+        for (id, region) in reveals {
+            let Some((viewport, max)) = laid.scroll_limits(id) else { continue };
+            let entry = self.scroll.entry(id).or_insert((0., 0.));
+            let reveal = |offset: f32, start: f32, len: f32, view: f32, max: f32| {
+                let target = if start < offset { start } else if start + len > offset + view { start + len - view } else { offset };
+                target.clamp(0., max)
+            };
+            entry.0 = reveal(entry.0, region.x, region.w, viewport.0, max.0);
+            entry.1 = reveal(entry.1, region.y, region.h, viewport.1, max.1);
+        }
+    }
+
     pub fn new(state: S) -> Self {
         Host { state, laid: None, mouse: (0., 0.), scroll: ScrollStore::new(), pressed: None, captured: None }
     }
@@ -53,6 +84,26 @@ impl<S: View> Host<S> {
 
 impl<S: View> App for Host<S> {
     fn event(&mut self, event: Event, cx: &mut Cx) {
+        cx.scroll_info = self.scroll_snapshot();
+        self.route(&event, cx);
+        self.state.event(&event, cx);
+        let reveals = std::mem::take(&mut cx.reveals);
+        self.apply_reveals(reveals);
+    }
+
+    fn scene(&mut self, cx: &mut Cx) -> Scene {
+        cx.scroll_info = self.scroll_snapshot();
+        let root = self.state.view(cx);
+        let (laid, scene) = layout::layout_and_paint(root, cx.size(), self.mouse, self.state.background(), cx.shaper, &mut self.scroll);
+        self.laid = Some(laid);
+        scene
+    }
+}
+
+impl<S: View> Host<S> {
+    /// Sends mouse and wheel events to the elements they are aimed at.
+    fn route(&mut self, event: &Event, cx: &mut Cx) {
+        let event = event.clone();
         let Some(laid) = &self.laid else { return };
         let modifiers = cx.modifiers;
         let mouse_event = |i: usize, pos: (f32, f32), button: MouseButton, click_count: u32| {
@@ -112,20 +163,6 @@ impl<S: View> App for Host<S> {
             }
             _ => {}
         }
-    }
-
-    fn scene(&mut self, cx: &mut Cx) -> Scene {
-        // Lists build only their visible rows, from where they are scrolled to *now* and the size they had last frame.
-        if let Some(laid) = &self.laid {
-            cx.scroll_info = laid
-                .viewports()
-                .map(|(id, viewport)| (id, ScrollInfo { offset: self.scroll.get(&id).copied().unwrap_or_default(), viewport }))
-                .collect();
-        }
-        let root = self.state.view(cx);
-        let (laid, scene) = layout::layout_and_paint(root, cx.size(), self.mouse, self.state.background(), cx.shaper, &mut self.scroll);
-        self.laid = Some(laid);
-        scene
     }
 }
 

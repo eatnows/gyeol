@@ -159,6 +159,11 @@ impl<S> Laid<S> {
         self.nodes.iter().filter_map(|n| n.id.filter(|_| n.scrolls() != (false, false)).map(|id| (id, (n.bounds.w, n.bounds.h))))
     }
 
+    /// The viewport size and furthest scroll offsets of the container `id` in this frame.
+    pub fn scroll_limits(&self, id: ElementId) -> Option<((f32, f32), (f32, f32))> {
+        self.nodes.iter().find(|n| n.id == Some(id)).map(|n| ((n.bounds.w, n.bounds.h), n.scroll_max))
+    }
+
     /// Scrolls whatever is under `pos` by `delta` logical pixels (positive scrolls towards the start).
     /// Each axis goes to the innermost scroll container that can still move that way, so a list that
     /// hit its end hands the rest to the container around it.

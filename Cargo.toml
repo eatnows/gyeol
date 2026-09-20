@@ -11,6 +11,7 @@ categories = ["gui"]
 publish = false
 
 [dependencies]
+arboard = { version = "3.6.1", default-features = false }
 bytemuck = { version = "1", features = ["derive"] }
 cosmic-text = "0.19"
 pollster = "1"

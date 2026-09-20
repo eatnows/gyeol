@@ -1,5 +1,8 @@
 //! Running a [`View`] without a window or GPU, for tests: feed it input, look at the scene it paints.
-use std::{cell::Cell, time::Instant};
+use std::{
+    cell::{Cell, RefCell},
+    time::Instant,
+};
 
 use crate::{
     element::Cursor,
@@ -17,6 +20,7 @@ struct Recorder {
     ime_allowed: Cell<bool>,
     ime_area: Cell<Option<Rect>>,
     theme: Cell<Option<SystemTheme>>,
+    clipboard: RefCell<Option<String>>,
 }
 
 impl Platform for Recorder {
@@ -34,6 +38,14 @@ impl Platform for Recorder {
 
     fn theme(&self) -> Option<SystemTheme> {
         self.theme.get()
+    }
+
+    fn clipboard_text(&self) -> Option<String> {
+        self.clipboard.borrow().clone()
+    }
+
+    fn set_clipboard_text(&self, text: &str) {
+        *self.clipboard.borrow_mut() = Some(text.to_string());
     }
 }
 
@@ -96,6 +108,20 @@ impl<S: View> TestHost<S> {
     pub fn set_system_theme(&mut self, theme: SystemTheme) -> &Scene {
         self.platform.theme.set(Some(theme));
         self.event(Event::ThemeChanged(theme))
+    }
+
+    /// The text on the (fake) clipboard.
+    pub fn clipboard(&self) -> Option<String> {
+        self.platform.clipboard.borrow().clone()
+    }
+
+    pub fn set_clipboard(&mut self, text: &str) {
+        *self.platform.clipboard.borrow_mut() = Some(text.to_string());
+    }
+
+    /// How far the scroll container `id` is scrolled.
+    pub fn scroll_offset(&self, id: impl std::hash::Hash) -> (f32, f32) {
+        self.host.scroll_offset(crate::element::ElementId::new(id))
     }
 
     pub fn set_modifiers(&mut self, modifiers: Modifiers) {
@@ -398,5 +424,60 @@ mod tests {
         host.mouse_move((50., 50.));
         host.mouse_up((50., 50.));
         assert_eq!(host.state().log, ["plain down"], "no drag or release events for it");
+    }
+
+    /// Keys go to the app's `event` hook; it can use the clipboard and ask for regions to be revealed.
+    #[derive(Default)]
+    struct Keys {
+        typed: String,
+        pasted: Option<String>,
+    }
+
+    impl View for Keys {
+        fn view(&self, _: &mut Cx) -> Element<Self> {
+            let mut list = div().id("rows").h(90.).overflow_y_scroll();
+            for i in 0..20 {
+                list = list.child(div().h(30.).child(text(format!("row {i}"))));
+            }
+            div().child(list)
+        }
+
+        fn event(&mut self, event: &Event, cx: &mut Cx) {
+            match event {
+                Event::KeyDown { key: Key::Char(c), .. } if c == "c" && cx.modifiers.command() => {
+                    cx.set_clipboard_text(&format!("copied:{}", self.typed));
+                }
+                Event::KeyDown { key: Key::Char(c), .. } if c == "v" && cx.modifiers.command() => self.pasted = cx.clipboard_text(),
+                Event::KeyDown { key: Key::Char(c), text: Some(t), .. } if c == "j" => {
+                    self.typed.push_str(t);
+                    cx.scroll_to_reveal("rows", Rect::new(0., 15. * 30., 10., 30.));
+                }
+                Event::KeyDown { key: Key::Char(c), .. } if c == "k" => cx.scroll_to_reveal("rows", Rect::new(0., 0., 10., 30.)),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn the_app_hook_gets_keys_and_can_use_the_clipboard() {
+        let mut host = TestHost::new(Keys::default(), (300., 300.));
+        host.key(Key::Char("j".into()), Some("j"));
+        host.set_modifiers(Modifiers { logo: true, ctrl: true, ..Default::default() });
+        host.key(Key::Char("c".into()), Some("c"));
+        assert_eq!(host.clipboard().as_deref(), Some("copied:j"));
+        host.set_clipboard("from elsewhere");
+        host.key(Key::Char("v".into()), Some("v"));
+        assert_eq!(host.state().pasted.as_deref(), Some("from elsewhere"));
+    }
+
+    #[test]
+    fn scroll_to_reveal_moves_the_least_needed() {
+        let mut host = TestHost::new(Keys::default(), (300., 300.));
+        host.key(Key::Char("j".into()), Some("j"));
+        assert_eq!(host.scroll_offset("rows").1, 15. * 30. + 30. - 90., "row 15 is brought to the bottom edge");
+        host.key(Key::Char("j".into()), Some("j"));
+        assert_eq!(host.scroll_offset("rows").1, 15. * 30. + 30. - 90., "already visible: no movement");
+        host.key(Key::Char("k".into()), Some("k"));
+        assert_eq!(host.scroll_offset("rows").1, 0., "row 0 is brought back to the top");
     }
 }

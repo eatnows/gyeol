@@ -28,6 +28,8 @@ pub trait Platform {
     fn set_cursor(&self, cursor: crate::element::Cursor);
     /// The system's current light/dark preference, if it has one.
     fn theme(&self) -> Option<SystemTheme>;
+    fn clipboard_text(&self) -> Option<String>;
+    fn set_clipboard_text(&self, text: &str);
 }
 
 struct WindowPlatform<'a>(&'a Window);
@@ -47,6 +49,16 @@ impl Platform for WindowPlatform<'_> {
 
     fn theme(&self) -> Option<SystemTheme> {
         self.0.theme().map(system_theme)
+    }
+
+    fn clipboard_text(&self) -> Option<String> {
+        arboard::Clipboard::new().ok()?.get_text().ok()
+    }
+
+    fn set_clipboard_text(&self, text: &str) {
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            let _ = clipboard.set_text(text.to_string());
+        }
     }
 }
 
@@ -69,6 +81,8 @@ pub struct Cx<'a> {
     wake_at: &'a mut Option<Instant>,
     /// Scroll positions and viewport sizes of the previous frame, for building only visible rows.
     pub(crate) scroll_info: std::collections::HashMap<crate::element::ElementId, crate::list::ScrollInfo>,
+    /// Regions asked to be scrolled into view; applied once the event has been handled.
+    pub(crate) reveals: Vec<(crate::element::ElementId, Rect)>,
 }
 
 impl<'a> Cx<'a> {
@@ -80,7 +94,7 @@ impl<'a> Cx<'a> {
         platform: &'a dyn Platform,
         wake_at: &'a mut Option<Instant>,
     ) -> Self {
-        Cx { shaper, modifiers, size, scale_factor, platform, wake_at, scroll_info: Default::default() }
+        Cx { shaper, modifiers, size, scale_factor, platform, wake_at, scroll_info: Default::default(), reveals: Vec::new() }
     }
 
     /// The drawable area in logical pixels.
@@ -101,6 +115,31 @@ impl<'a> Cx<'a> {
     /// Turns input-method (IME) support on or off. Text fields want it on.
     pub fn set_ime_allowed(&self, allowed: bool) {
         self.platform.set_ime_allowed(allowed);
+    }
+
+    /// The text on the system clipboard, if any.
+    pub fn clipboard_text(&self) -> Option<String> {
+        self.platform.clipboard_text()
+    }
+
+    pub fn set_clipboard_text(&self, text: &str) {
+        self.platform.set_clipboard_text(text);
+    }
+
+    /// How far the scroll container `id` was scrolled in the latest frame.
+    pub fn scroll_offset(&self, id: impl std::hash::Hash) -> (f32, f32) {
+        self.scroll_info.get(&crate::element::ElementId::new(id)).map_or((0., 0.), |i| i.offset)
+    }
+
+    /// The visible size of the scroll container `id` in the latest frame.
+    pub fn viewport(&self, id: impl std::hash::Hash) -> Option<(f32, f32)> {
+        self.scroll_info.get(&crate::element::ElementId::new(id)).map(|i| i.viewport)
+    }
+
+    /// Scrolls the container `id` just enough that `region` (in the container's unscrolled content
+    /// coordinates) is visible. Takes effect for the next frame.
+    pub fn scroll_to_reveal(&mut self, id: impl std::hash::Hash, region: Rect) {
+        self.reveals.push((crate::element::ElementId::new(id), region));
     }
 
     /// Whether the system prefers dark or light (light when it does not say).
