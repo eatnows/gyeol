@@ -234,4 +234,54 @@ mod tests {
         assert_eq!(host.cursor(), Cursor::Default);
         assert_eq!(host.scene().quads().next().unwrap().background, IDLE);
     }
+
+    struct Rows;
+
+    impl View for Rows {
+        fn view(&self, _: &mut Cx) -> Element<Self> {
+            let mut list = div().id("rows").h(90.).overflow_y_scroll();
+            for i in 0..20 {
+                list = list.child(div().h(30.).child(text(format!("row {i}"))));
+            }
+            div().child(list)
+        }
+    }
+
+    fn y_of(host: &TestHost<Rows>, content: &str) -> f32 {
+        host.scene().texts().find(|t| t.content == content).unwrap().origin.1
+    }
+
+    #[test]
+    fn the_wheel_scrolls_a_list_and_stops_at_both_ends() {
+        let mut host = TestHost::new(Rows, (300., 300.));
+        assert_eq!(y_of(&host, "row 1"), 30.);
+
+        host.scroll((10., 10.), ScrollDelta::Pixels(0., -50.));
+        assert_eq!(y_of(&host, "row 1"), -20., "content moved up by 50");
+
+        host.scroll((10., 10.), ScrollDelta::Lines(0., -1.));
+        assert_eq!(y_of(&host, "row 1"), -60., "one wheel notch is 40 logical pixels");
+
+        host.scroll((10., 10.), ScrollDelta::Pixels(0., -100_000.));
+        assert_eq!(y_of(&host, "row 19"), 60., "at the end the last row sits at the bottom of the 90px viewport");
+
+        host.scroll((10., 10.), ScrollDelta::Pixels(0., 100_000.));
+        assert_eq!(y_of(&host, "row 0"), 0., "back at the start");
+    }
+
+    #[test]
+    fn horizontal_wheel_movement_does_not_move_a_vertical_list() {
+        let mut host = TestHost::new(Rows, (300., 300.));
+        host.scroll((10., 10.), ScrollDelta::Pixels(-80., 0.));
+        assert_eq!(y_of(&host, "row 0"), 0.);
+        host.scroll((10., 10.), ScrollDelta::Pixels(-80., -30.));
+        assert_eq!(y_of(&host, "row 0"), -30., "only the vertical part counts");
+    }
+
+    #[test]
+    fn scrolling_outside_the_list_does_nothing() {
+        let mut host = TestHost::new(Rows, (300., 300.));
+        host.scroll((10., 200.), ScrollDelta::Pixels(0., -50.));
+        assert_eq!(y_of(&host, "row 0"), 0.);
+    }
 }

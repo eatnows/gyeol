@@ -17,7 +17,7 @@ pub mod testing;
 mod text;
 pub mod view;
 
-pub use element::{div, text, Align, Cursor, Direction, Element, Justify, Length, Style};
+pub use element::{div, text, Align, Cursor, Direction, Element, ElementId, Justify, Length, Overflow, Style};
 pub use error::{Error, Result};
 pub use event::{Event, Ime, Key, Modifiers, MouseButton, NamedKey, ScrollDelta};
 pub use renderer::Renderer;

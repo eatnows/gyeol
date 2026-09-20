@@ -3,6 +3,8 @@
 //! An [`Element<S>`] tree is rebuilt from the app state `S` every frame. Handlers such as
 //! [`Element::on_click`] receive `&mut S`, so an interaction is just a change to the state; the next
 //! frame's tree reflects it.
+use std::hash::{Hash, Hasher};
+
 use crate::{scene::Color, shell::Cx};
 
 /// A size along one axis.
@@ -40,6 +42,38 @@ pub enum Justify {
     SpaceBetween,
     SpaceAround,
     SpaceEvenly,
+}
+
+/// What happens to content that does not fit inside an element.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Overflow {
+    /// Drawn outside the element's box.
+    #[default]
+    Visible,
+    /// Cut off at the element's box.
+    Hidden,
+    /// Cut off, and scrollable with the wheel or trackpad. Give the element an [`Element::id`] so its
+    /// scroll position survives from frame to frame.
+    Scroll,
+}
+
+impl Overflow {
+    /// Clipping applies on both axes, so an axis left visible becomes hidden.
+    fn max_hidden(self) -> Overflow {
+        if self == Overflow::Visible { Overflow::Hidden } else { self }
+    }
+}
+
+/// Identifies an element across frames (for scroll positions). Made from any hashable value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ElementId(pub u64);
+
+impl ElementId {
+    pub fn new(value: impl Hash) -> ElementId {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        value.hash(&mut hasher);
+        ElementId(hasher.finish())
+    }
 }
 
 /// The mouse cursor shown over an element.
@@ -80,6 +114,10 @@ pub struct Style {
     pub text_color: Option<Color>,
     pub text_size: Option<f32>,
     pub cursor: Cursor,
+    pub overflow_x: Overflow,
+    pub overflow_y: Overflow,
+    /// Color of the scroll thumb drawn while the content overflows; none draws no thumb.
+    pub scrollbar: Option<Color>,
 }
 
 impl Default for Style {
@@ -97,7 +135,7 @@ impl Default for Style {
             max_width: None,
             max_height: None,
             grow: 0.,
-            shrink: 1.,
+            shrink: 0.,
             align_items: None,
             align_self: None,
             justify: None,
@@ -109,6 +147,9 @@ impl Default for Style {
             text_color: None,
             text_size: None,
             cursor: Cursor::Default,
+            overflow_x: Overflow::Visible,
+            overflow_y: Overflow::Visible,
+            scrollbar: None,
         }
     }
 }
@@ -122,6 +163,7 @@ pub(crate) enum Kind<S> {
 
 /// A node of the UI tree. Build one with [`div`] or [`text`].
 pub struct Element<S> {
+    pub(crate) id: Option<ElementId>,
     pub(crate) style: Style,
     pub(crate) kind: Kind<S>,
     pub(crate) on_click: Option<Handler<S>>,
@@ -129,15 +171,22 @@ pub struct Element<S> {
 
 /// A container. Children stack vertically; call [`Element::row`] for a horizontal row.
 pub fn div<S>() -> Element<S> {
-    Element { style: Style::default(), kind: Kind::Div(Vec::new()), on_click: None }
+    Element { id: None, style: Style::default(), kind: Kind::Div(Vec::new()), on_click: None }
 }
 
 /// A single line of text, in the size and color inherited from its parents.
 pub fn text<S>(content: impl Into<String>) -> Element<S> {
-    Element { style: Style::default(), kind: Kind::Text(content.into()), on_click: None }
+    Element { id: None, style: Style::default(), kind: Kind::Text(content.into()), on_click: None }
 }
 
 impl<S> Element<S> {
+    /// Names this element so state kept for it (its scroll position) survives from frame to frame.
+    /// Ids must be unique among the elements that need one.
+    pub fn id(mut self, id: impl Hash) -> Self {
+        self.id = Some(ElementId::new(id));
+        self
+    }
+
     pub fn child(mut self, child: Element<S>) -> Self {
         if let Kind::Div(children) = &mut self.kind {
             children.push(child);
@@ -274,8 +323,10 @@ impl<S> Element<S> {
         self
     }
 
-    pub fn no_shrink(mut self) -> Self {
-        self.style.shrink = 0.;
+    /// Lets this element get smaller than its size when its parent runs out of room. Elements keep
+    /// their size by default.
+    pub fn shrink(mut self) -> Self {
+        self.style.shrink = 1.;
         self
     }
 
@@ -308,6 +359,35 @@ impl<S> Element<S> {
 
     pub fn justify_end(self) -> Self {
         self.justify(Justify::End)
+    }
+
+    // ---- overflow ----------------------------------------------------------------------------
+
+    /// Cuts off content outside this element's box.
+    pub fn overflow_hidden(mut self) -> Self {
+        self.style.overflow_x = Overflow::Hidden;
+        self.style.overflow_y = Overflow::Hidden;
+        self
+    }
+
+    /// Scrolls vertically when the content is taller than the element. Also give it a fixed or
+    /// bounded height and an [`Element::id`].
+    pub fn overflow_y_scroll(mut self) -> Self {
+        self.style.overflow_y = Overflow::Scroll;
+        self.style.overflow_x = self.style.overflow_x.max_hidden();
+        self
+    }
+
+    pub fn overflow_x_scroll(mut self) -> Self {
+        self.style.overflow_x = Overflow::Scroll;
+        self.style.overflow_y = self.style.overflow_y.max_hidden();
+        self
+    }
+
+    /// Draws a scroll thumb in `color` while the content overflows.
+    pub fn scrollbar(mut self, color: Color) -> Self {
+        self.style.scrollbar = Some(color);
+        self
     }
 
     // ---- painting --------------------------------------------------------------------------

@@ -2,11 +2,14 @@
 use crate::{
     element::{Cursor, Element},
     error::Result,
-    event::{Event, MouseButton},
-    layout::{self, Laid},
+    event::{Event, MouseButton, ScrollDelta},
+    layout::{self, Laid, ScrollStore},
     scene::{Color, Scene},
     shell::{run, App, Cx},
 };
+
+/// How far one notch of a mouse wheel scrolls, in logical pixels.
+const LINE_SCROLL: f32 = 40.;
 
 /// An app whose whole UI is a function of its state.
 pub trait View: Sized + 'static {
@@ -29,13 +32,14 @@ pub(crate) struct Host<S: View> {
     /// The last frame's layout, which mouse events are resolved against.
     laid: Option<Laid<S>>,
     mouse: (f32, f32),
+    scroll: ScrollStore,
     /// The element a click started on; the click only counts if it also ends there.
     pressed: Option<usize>,
 }
 
 impl<S: View> Host<S> {
     pub fn new(state: S) -> Self {
-        Host { state, laid: None, mouse: (0., 0.), pressed: None }
+        Host { state, laid: None, mouse: (0., 0.), scroll: ScrollStore::new(), pressed: None }
     }
 }
 
@@ -57,13 +61,20 @@ impl<S: View> App for Host<S> {
                 }
                 self.pressed = None;
             }
+            Event::Scroll { delta, pos } => {
+                let (dx, dy) = match delta {
+                    ScrollDelta::Lines(x, y) => (x * LINE_SCROLL, y * LINE_SCROLL),
+                    ScrollDelta::Pixels(x, y) => (x, y),
+                };
+                laid.scroll_by(pos, (dx, dy), &mut self.scroll);
+            }
             _ => {}
         }
     }
 
     fn scene(&mut self, cx: &mut Cx) -> Scene {
         let root = self.state.view(cx);
-        let (laid, scene) = layout::layout_and_paint(root, cx.size(), self.mouse, self.state.background(), cx.shaper);
+        let (laid, scene) = layout::layout_and_paint(root, cx.size(), self.mouse, self.state.background(), cx.shaper, &mut self.scroll);
         self.laid = Some(laid);
         scene
     }
