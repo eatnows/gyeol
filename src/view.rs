@@ -86,6 +86,10 @@ impl<S: View> App for Host<S> {
     fn event(&mut self, event: Event, cx: &mut Cx) {
         cx.scroll_info = self.scroll_snapshot();
         self.route(&event, cx);
+        // Element routing may have moved a scroll container. Views that react to this event (for
+        // example an infinite list loading near its end) need the post-scroll position, not the
+        // previous frame's snapshot.
+        cx.scroll_info = self.scroll_snapshot();
         self.state.event(&event, cx);
         let reveals = std::mem::take(&mut cx.reveals);
         self.apply_reveals(reveals);

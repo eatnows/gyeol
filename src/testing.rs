@@ -318,6 +318,33 @@ mod tests {
         assert_eq!(y_of(&host, "row 0"), 0., "back at the start");
     }
 
+    struct ScrollObserver {
+        observed_offset: f32,
+    }
+
+    impl View for ScrollObserver {
+        fn view(&self, _: &mut Cx) -> Element<Self> {
+            let mut list = div().id("observed-list").h(90.).overflow_y_scroll();
+            for _ in 0..20 {
+                list = list.child(div().h(30.));
+            }
+            div().child(list)
+        }
+
+        fn event(&mut self, event: &Event, cx: &mut Cx) {
+            if matches!(event, Event::Scroll { .. }) {
+                self.observed_offset = cx.scroll_offset("observed-list").1;
+            }
+        }
+    }
+
+    #[test]
+    fn an_app_hook_sees_the_scroll_offset_after_element_routing() {
+        let mut host = TestHost::new(ScrollObserver { observed_offset: 0. }, (300., 300.));
+        host.scroll((10., 10.), ScrollDelta::Pixels(0., -50.));
+        assert_eq!(host.state().observed_offset, 50.);
+    }
+
     #[test]
     fn horizontal_wheel_movement_does_not_move_a_vertical_list() {
         let mut host = TestHost::new(Rows, (300., 300.));
