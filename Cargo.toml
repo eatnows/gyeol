@@ -1,0 +1,18 @@
+[package]
+name = "gyeolui"
+version = "0.0.1"
+edition = "2024"
+description = "결 (gyeol): a native UI toolkit for Rust, written from scratch on winit, wgpu and cosmic-text"
+license = "MIT OR Apache-2.0"
+authors = ["eatnows"]
+repository = "https://github.com/eatnows/gyeolui"
+keywords = ["gui", "ui", "wgpu", "text"]
+categories = ["gui"]
+publish = false
+
+[dependencies]
+bytemuck = { version = "1", features = ["derive"] }
+cosmic-text = "0.19"
+pollster = "1"
+wgpu = "30"
+winit = "0.30"
