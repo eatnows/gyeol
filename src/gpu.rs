@@ -24,7 +24,7 @@ impl GrowBuffer {
 
     fn alloc(device: &wgpu::Device, size: u64, usage: wgpu::BufferUsages) -> wgpu::Buffer {
         device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("gyeolui buffer"),
+            label: Some("gyui buffer"),
             size,
             usage: usage | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,

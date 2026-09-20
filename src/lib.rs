@@ -1,4 +1,4 @@
-//! **gyeolui** (결): a native UI toolkit for Rust, written from scratch on winit, wgpu and cosmic-text.
+//! **gyui** (결): a native UI toolkit for Rust, written from scratch on winit, wgpu and cosmic-text.
 //!
 //! Early days: the pieces so far are a renderer-agnostic [`Scene`], a wgpu [`Renderer`] and a
 //! [`shell`] that opens a window and runs an [`App`].

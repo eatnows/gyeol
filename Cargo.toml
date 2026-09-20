@@ -1,11 +1,11 @@
 [package]
-name = "gyeolui"
+name = "gyui"
 version = "0.0.1"
 edition = "2024"
 description = "결 (gyeol): a native UI toolkit for Rust, written from scratch on winit, wgpu and cosmic-text"
 license = "MIT OR Apache-2.0"
 authors = ["eatnows"]
-repository = "https://github.com/eatnows/gyeolui"
+repository = "https://github.com/eatnows/gyui"
 keywords = ["gui", "ui", "wgpu", "text"]
 categories = ["gui"]
 publish = false
