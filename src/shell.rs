@@ -15,7 +15,7 @@ use winit::{
 
 use crate::{
     error::{err, Result},
-    event::{Event, Ime, Key, Modifiers, MouseButton, NamedKey, ScrollDelta},
+    event::{Event, Ime, Key, Modifiers, MouseButton, NamedKey, ScrollDelta, SystemTheme},
     renderer::Renderer,
     scene::{Rect, Scene},
     shaper::Shaper,
@@ -26,6 +26,8 @@ pub trait Platform {
     fn set_ime_allowed(&self, allowed: bool);
     fn set_ime_cursor_area(&self, area: Rect);
     fn set_cursor(&self, cursor: crate::element::Cursor);
+    /// The system's current light/dark preference, if it has one.
+    fn theme(&self) -> Option<SystemTheme>;
 }
 
 struct WindowPlatform<'a>(&'a Window);
@@ -41,6 +43,17 @@ impl Platform for WindowPlatform<'_> {
 
     fn set_cursor(&self, cursor: crate::element::Cursor) {
         self.0.set_cursor(winit::window::CursorIcon::from(cursor));
+    }
+
+    fn theme(&self) -> Option<SystemTheme> {
+        self.0.theme().map(system_theme)
+    }
+}
+
+fn system_theme(theme: winit::window::Theme) -> SystemTheme {
+    match theme {
+        winit::window::Theme::Light => SystemTheme::Light,
+        winit::window::Theme::Dark => SystemTheme::Dark,
     }
 }
 
@@ -90,6 +103,11 @@ impl<'a> Cx<'a> {
         self.platform.set_ime_allowed(allowed);
     }
 
+    /// Whether the system prefers dark or light (light when it does not say).
+    pub fn system_theme(&self) -> SystemTheme {
+        self.platform.theme().unwrap_or(SystemTheme::Light)
+    }
+
     /// Sets the mouse cursor shown over the window.
     pub fn set_cursor(&self, cursor: crate::element::Cursor) {
         self.platform.set_cursor(cursor);
@@ -110,11 +128,42 @@ pub trait App {
     fn scene(&mut self, cx: &mut Cx) -> Scene;
 }
 
+/// How the window is opened.
+#[derive(Clone, Debug)]
+pub struct WindowOptions {
+    pub title: String,
+    /// Initial size in logical pixels.
+    pub size: (f32, f32),
+    /// The smallest size the user can resize to.
+    pub min_size: Option<(f32, f32)>,
+}
+
+impl WindowOptions {
+    pub fn new(title: impl Into<String>) -> Self {
+        WindowOptions { title: title.into(), size: (900., 600.), min_size: None }
+    }
+
+    pub fn size(mut self, width: f32, height: f32) -> Self {
+        self.size = (width, height);
+        self
+    }
+
+    pub fn min_size(mut self, width: f32, height: f32) -> Self {
+        self.min_size = Some((width, height));
+        self
+    }
+}
+
 /// Opens a window titled `title` and runs `app` until the window is closed.
 pub fn run(title: &str, app: impl App) -> Result<()> {
+    run_with(WindowOptions::new(title), app)
+}
+
+/// Opens a window as described by `options` and runs `app` until the window is closed.
+pub fn run_with(options: WindowOptions, app: impl App) -> Result<()> {
     let event_loop = EventLoop::new().map_err(err("create event loop"))?;
     let mut shell = Shell {
-        title: title.to_string(),
+        options,
         app,
         window: None,
         renderer: None,
@@ -137,7 +186,7 @@ const MULTI_CLICK_TIME: Duration = Duration::from_millis(500);
 const MULTI_CLICK_DISTANCE: f32 = 5.;
 
 struct Shell<A: App> {
-    title: String,
+    options: WindowOptions,
     app: A,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
@@ -182,7 +231,12 @@ impl<A: App> ApplicationHandler for Shell<A> {
         if self.window.is_some() {
             return;
         }
-        let attributes = Window::default_attributes().with_title(self.title.as_str()).with_inner_size(LogicalSize::new(900., 600.));
+        let mut attributes = Window::default_attributes()
+            .with_title(self.options.title.as_str())
+            .with_inner_size(LogicalSize::new(self.options.size.0, self.options.size.1));
+        if let Some((w, h)) = self.options.min_size {
+            attributes = attributes.with_min_inner_size(LogicalSize::new(w, h));
+        }
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
             Err(e) => {
@@ -272,6 +326,7 @@ impl<A: App> ApplicationHandler for Shell<A> {
                 WinitIme::Enabled | WinitIme::Disabled => {}
             },
             WindowEvent::Focused(focused) => self.dispatch(Event::FocusChanged(focused)),
+            WindowEvent::ThemeChanged(theme) => self.dispatch(Event::ThemeChanged(system_theme(theme))),
             _ => {}
         }
     }

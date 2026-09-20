@@ -69,6 +69,13 @@ pub enum Ime {
     Commit(String),
 }
 
+/// The operating system's light/dark preference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SystemTheme {
+    Light,
+    Dark,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     MouseMoved { pos: (f32, f32) },
@@ -85,4 +92,6 @@ pub enum Event {
     Ime(Ime),
     /// The window gained or lost keyboard focus.
     FocusChanged(bool),
+    /// The operating system switched between light and dark.
+    ThemeChanged(SystemTheme),
 }

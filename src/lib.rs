@@ -20,10 +20,10 @@ pub mod view;
 
 pub use element::{div, text, Align, Cursor, Direction, Element, ElementId, Justify, Length, Overflow, Style};
 pub use error::{Error, Result};
-pub use event::{Event, Ime, Key, Modifiers, MouseButton, NamedKey, ScrollDelta};
+pub use event::{Event, Ime, Key, Modifiers, MouseButton, NamedKey, ScrollDelta, SystemTheme};
 pub use renderer::Renderer;
 pub use scene::{Color, Quad, Rect, Scene, Text};
 pub use list::uniform_list;
 pub use shaper::Shaper;
-pub use shell::{run, App, Cx, Platform};
-pub use view::{run_view, View};
+pub use shell::{run, run_with, App, Cx, Platform, WindowOptions};
+pub use view::{run_view, run_view_with, View};

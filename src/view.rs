@@ -6,7 +6,7 @@ use crate::{
     layout::{self, Laid, ScrollStore},
     list::ScrollInfo,
     scene::{Color, Scene},
-    shell::{run, App, Cx},
+    shell::{run_with, App, Cx, WindowOptions},
 };
 
 /// How far one notch of a mouse wheel scrolls, in logical pixels.
@@ -25,7 +25,12 @@ pub trait View: Sized + 'static {
 
 /// Opens a window titled `title` showing `state`'s [`View`] until it is closed.
 pub fn run_view<S: View>(title: &str, state: S) -> Result<()> {
-    run(title, Host::new(state))
+    run_view_with(WindowOptions::new(title), state)
+}
+
+/// Like [`run_view`], with control over the window's size.
+pub fn run_view_with<S: View>(options: WindowOptions, state: S) -> Result<()> {
+    run_with(options, Host::new(state))
 }
 
 pub(crate) struct Host<S: View> {

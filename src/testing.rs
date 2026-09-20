@@ -3,7 +3,7 @@ use std::{cell::Cell, time::Instant};
 
 use crate::{
     element::Cursor,
-    event::{Event, Ime, Key, Modifiers, MouseButton, ScrollDelta},
+    event::{Event, Ime, Key, Modifiers, MouseButton, ScrollDelta, SystemTheme},
     scene::{Rect, Scene},
     shaper::Shaper,
     shell::{App, Cx, Platform},
@@ -16,6 +16,7 @@ struct Recorder {
     cursor: Cell<Cursor>,
     ime_allowed: Cell<bool>,
     ime_area: Cell<Option<Rect>>,
+    theme: Cell<Option<SystemTheme>>,
 }
 
 impl Platform for Recorder {
@@ -29,6 +30,10 @@ impl Platform for Recorder {
 
     fn set_cursor(&self, cursor: Cursor) {
         self.cursor.set(cursor);
+    }
+
+    fn theme(&self) -> Option<SystemTheme> {
+        self.theme.get()
     }
 }
 
@@ -83,6 +88,12 @@ impl<S: View> TestHost<S> {
 
     pub fn ime_cursor_area(&self) -> Option<Rect> {
         self.platform.ime_area.get()
+    }
+
+    /// Pretends the operating system switched to `theme` and delivers the change to the app.
+    pub fn set_system_theme(&mut self, theme: SystemTheme) -> &Scene {
+        self.platform.theme.set(Some(theme));
+        self.event(Event::ThemeChanged(theme))
     }
 
     pub fn set_modifiers(&mut self, modifiers: Modifiers) {
