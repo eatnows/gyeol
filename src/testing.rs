@@ -284,4 +284,51 @@ mod tests {
         host.scroll((10., 200.), ScrollDelta::Pixels(0., -50.));
         assert_eq!(y_of(&host, "row 0"), 0.);
     }
+
+    struct Big {
+        selected: Option<usize>,
+    }
+
+    impl View for Big {
+        fn view(&self, cx: &mut Cx) -> Element<Self> {
+            let list = crate::list::uniform_list(cx, "big", 100_000, 20., |i| {
+                div().on_click(move |s: &mut Big, _| s.selected = Some(i)).child(text(format!("item {i}")))
+            });
+            div().child(list.h(100.))
+        }
+    }
+
+    fn texts(host: &TestHost<Big>) -> Vec<String> {
+        host.scene().texts().map(|t| t.content.clone()).collect()
+    }
+
+    #[test]
+    fn a_huge_list_builds_only_the_rows_on_screen() {
+        let mut host = TestHost::new(Big { selected: None }, (300., 300.));
+        host.frame(); // the second frame knows the real viewport (100px), the first used the window's height
+        let shown = texts(&host);
+        assert!(shown.len() <= 100 / 20 + 2 * 2 + 1, "5 visible rows plus a little overscan, got {}", shown.len());
+        assert_eq!(shown[0], "item 0");
+
+        host.scroll((10., 10.), ScrollDelta::Pixels(0., -10_000.));
+        let shown = texts(&host);
+        assert!(shown.len() <= 10, "still only a handful of rows, got {}", shown.len());
+        let row500 = host.scene().texts().find(|t| t.content == "item 500").expect("row 500 is on screen");
+        assert_eq!(row500.origin.1, 0., "500 rows of 20px scrolled off: row 500 is at the top");
+
+        host.click_text("item 502");
+        assert_eq!(host.state().selected, Some(502), "clicks reach the right row");
+    }
+
+    #[test]
+    fn scrolling_to_the_very_end_shows_the_last_rows() {
+        let mut host = TestHost::new(Big { selected: None }, (300., 300.));
+        host.frame();
+        host.scroll((10., 10.), ScrollDelta::Pixels(0., -100_000_000.));
+        let shown = texts(&host);
+        assert!(shown.contains(&"item 99999".to_string()), "{shown:?}");
+        assert!(shown.len() <= 10);
+        let last = host.scene().texts().find(|t| t.content == "item 99999").unwrap();
+        assert_eq!(last.origin.1, 80., "the last 20px row ends at the bottom of the 100px viewport");
+    }
 }

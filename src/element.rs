@@ -101,6 +101,8 @@ pub struct Style {
     pub max_height: Option<f32>,
     pub grow: f32,
     pub shrink: f32,
+    /// The size along the main axis before free space is shared out; `Auto` means the content's size.
+    pub basis: Length,
     pub align_items: Option<Align>,
     pub align_self: Option<Align>,
     pub justify: Option<Justify>,
@@ -136,6 +138,7 @@ impl Default for Style {
             max_height: None,
             grow: 0.,
             shrink: 0.,
+            basis: Length::Auto,
             align_items: None,
             align_self: None,
             justify: None,
@@ -317,9 +320,12 @@ impl<S> Element<S> {
         self
     }
 
-    /// Takes a share of the free space along the parent's main axis.
+    /// Takes a share of the free space along the parent's main axis, starting from nothing (like CSS
+    /// `flex: 1`), so its own content size does not push the others out.
     pub fn grow(mut self) -> Self {
         self.style.grow = 1.;
+        self.style.shrink = 1.;
+        self.style.basis = Length::Px(0.);
         self
     }
 
@@ -410,6 +416,12 @@ impl<S> Element<S> {
 
     pub fn rounded(mut self, radius: f32) -> Self {
         self.style.radii = [radius; 4];
+        self
+    }
+
+    /// Sets each corner's radius: top-left, top-right, bottom-right, bottom-left.
+    pub fn rounded_corners(mut self, radii: [f32; 4]) -> Self {
+        self.style.radii = radii;
         self
     }
 

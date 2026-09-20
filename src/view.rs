@@ -4,6 +4,7 @@ use crate::{
     error::Result,
     event::{Event, MouseButton, ScrollDelta},
     layout::{self, Laid, ScrollStore},
+    list::ScrollInfo,
     scene::{Color, Scene},
     shell::{run, App, Cx},
 };
@@ -73,6 +74,13 @@ impl<S: View> App for Host<S> {
     }
 
     fn scene(&mut self, cx: &mut Cx) -> Scene {
+        // Lists build only their visible rows, from where they are scrolled to *now* and the size they had last frame.
+        if let Some(laid) = &self.laid {
+            cx.scroll_info = laid
+                .viewports()
+                .map(|(id, viewport)| (id, ScrollInfo { offset: self.scroll.get(&id).copied().unwrap_or_default(), viewport }))
+                .collect();
+        }
         let root = self.state.view(cx);
         let (laid, scene) = layout::layout_and_paint(root, cx.size(), self.mouse, self.state.background(), cx.shaper, &mut self.scroll);
         self.laid = Some(laid);

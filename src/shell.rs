@@ -54,6 +54,8 @@ pub struct Cx<'a> {
     scale_factor: f32,
     platform: &'a dyn Platform,
     wake_at: &'a mut Option<Instant>,
+    /// Scroll positions and viewport sizes of the previous frame, for building only visible rows.
+    pub(crate) scroll_info: std::collections::HashMap<crate::element::ElementId, crate::list::ScrollInfo>,
 }
 
 impl<'a> Cx<'a> {
@@ -65,7 +67,7 @@ impl<'a> Cx<'a> {
         platform: &'a dyn Platform,
         wake_at: &'a mut Option<Instant>,
     ) -> Self {
-        Cx { shaper, modifiers, size, scale_factor, platform, wake_at }
+        Cx { shaper, modifiers, size, scale_factor, platform, wake_at, scroll_info: Default::default() }
     }
 
     /// The drawable area in logical pixels.

@@ -212,6 +212,7 @@ impl Settings {
                             .p(8.)
                             .gap(4.)
                             .bg(p.panel)
+                            .rounded_corners([0., 0., 0., 9.])
                             .child(self.nav_item(p, Tab::General, "General"))
                             .child(self.nav_item(p, Tab::Editor, "Editor")),
                     )

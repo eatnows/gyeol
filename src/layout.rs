@@ -92,6 +92,11 @@ impl<S> Laid<S> {
         self.chain(self.topmost_at(pos)).map(|i| self.nodes[i].cursor).find(|c| *c != Cursor::Default).unwrap_or_default()
     }
 
+    /// The viewport size of every scroll container in this frame.
+    pub fn viewports(&self) -> impl Iterator<Item = (ElementId, (f32, f32))> + '_ {
+        self.nodes.iter().filter_map(|n| n.id.filter(|_| n.scrolls() != (false, false)).map(|id| (id, (n.bounds.w, n.bounds.h))))
+    }
+
     /// Scrolls whatever is under `pos` by `delta` logical pixels (positive scrolls towards the start).
     /// Each axis goes to the innermost scroll container that can still move that way, so a list that
     /// hit its end hands the rest to the container around it.
@@ -316,6 +321,7 @@ fn to_taffy(s: &Style) -> taffy::Style {
     t.max_size = taffy::Size { width: bound(s.max_width), height: bound(s.max_height) };
     t.flex_grow = s.grow;
     t.flex_shrink = s.shrink;
+    t.flex_basis = dimension(s.basis);
     let align = |a: Align| match a {
         Align::Start => AlignItems::FLEX_START,
         Align::End => AlignItems::FLEX_END,

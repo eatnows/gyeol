@@ -10,6 +10,7 @@ Work in progress; nothing here is stable or published yet.
 cargo run --example hello        # rounded rectangles and text
 cargo run --example textinput    # text fields: mouse, keyboard, Korean IME composition
 cargo run --example settings     # declarative API: flexbox layout, hover, click (try --dark --editor)
+cargo run --example filelist     # 100,000-row virtualized list: scroll, hover, select
 cargo test --lib --examples
 ```
 
