@@ -62,7 +62,15 @@ impl Default for Shaper {
 
 impl Shaper {
     pub fn new() -> Self {
-        Shaper { font_system: FontSystem::new(), shaped: HashMap::new(), frame: 0 }
+        let mut font_system = FontSystem::new();
+        // `fontdb` (which cosmic-text sits on) has no built-in "sans-serif" generic-family alias on
+        // macOS, so `TextStyle`'s default (`family: None`, meant to mean "the system's default
+        // sans-serif") would otherwise fail to resolve to anything and fall back to whatever
+        // arbitrary font the shaper picks next — not the real system UI font. macOS does ship the
+        // system font (San Francisco) as a queryable face named "System Font"; point the alias at it.
+        #[cfg(target_os = "macos")]
+        font_system.db_mut().set_sans_serif_family("System Font");
+        Shaper { font_system, shaped: HashMap::new(), frame: 0 }
     }
 
     /// Height of one line of text at `size`.
