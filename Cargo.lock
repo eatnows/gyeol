@@ -684,6 +684,7 @@ name = "gyeol"
 version = "0.0.1"
 dependencies = [
  "arboard",
+ "block2 0.5.1",
  "bytemuck",
  "cosmic-text",
  "objc2 0.5.2",

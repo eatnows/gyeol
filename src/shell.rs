@@ -83,6 +83,10 @@ pub struct Cx<'a> {
     pub(crate) scroll_info: std::collections::HashMap<crate::element::ElementId, crate::list::ScrollInfo>,
     /// Regions asked to be scrolled into view; applied once the event has been handled.
     pub(crate) reveals: Vec<(crate::element::ElementId, Rect)>,
+    /// Pointer readings since the previous pointer event, oldest first.
+    pub(crate) pointer_samples: Vec<crate::pointer::PointerSample>,
+    /// The reading that belongs to the event being handled, when the platform gave one.
+    pub(crate) pointer: Option<crate::pointer::PointerSample>,
 }
 
 impl<'a> Cx<'a> {
@@ -94,7 +98,7 @@ impl<'a> Cx<'a> {
         platform: &'a dyn Platform,
         wake_at: &'a mut Option<Instant>,
     ) -> Self {
-        Cx { shaper, modifiers, size, scale_factor, platform, wake_at, scroll_info: Default::default(), reveals: Vec::new() }
+        Cx { shaper, modifiers, size, scale_factor, platform, wake_at, scroll_info: Default::default(), reveals: Vec::new(), pointer_samples: Vec::new(), pointer: None }
     }
 
     /// The drawable area in logical pixels.
@@ -147,6 +151,29 @@ impl<'a> Cx<'a> {
         self.reveals.push((crate::element::ElementId::new(id), region));
     }
 
+    /// Every pointer reading since the previous pointer event, oldest first; the last one is where
+    /// the pointer is now. A frame can contain many pen samples, so draw strokes through all of them
+    /// rather than only the event's position. Empty when the platform reports none (see
+    /// [`crate::pointer`]); then use the event's own `pos`.
+    pub fn pointer_samples(&self) -> &[crate::pointer::PointerSample] {
+        &self.pointer_samples
+    }
+
+    pub(crate) fn with_pointer(mut self, samples: Vec<crate::pointer::PointerSample>, current: Option<crate::pointer::PointerSample>) -> Self {
+        self.pointer_samples = samples;
+        self.pointer = current;
+        self
+    }
+
+    /// Kind, pressure and tilt for a mouse event; `pressed` is whether a button is down, for a pointer
+    /// the platform said nothing about.
+    pub(crate) fn pointer_state(&self, pressed: bool) -> (crate::pointer::PointerKind, f32, Option<(f32, f32)>) {
+        match self.pointer {
+            Some(s) => (s.kind, s.pressure, s.tilt),
+            None => (crate::pointer::PointerKind::Mouse, if pressed { 1. } else { 0. }, None),
+        }
+    }
+
     /// Whether the system prefers dark or light (light when it does not say).
     pub fn system_theme(&self) -> SystemTheme {
         self.platform.theme().unwrap_or(SystemTheme::Light)
@@ -191,11 +218,15 @@ pub struct WindowOptions {
     pub traffic_lights: Option<(f32, f32)>,
     /// macOS: blur what is behind the window (NSVisualEffectView); needs `transparent`. Ignored elsewhere.
     pub vibrancy: bool,
+    /// macOS: deliver every mouse and pen movement instead of letting AppKit merge them to one per
+    /// frame, so [`Cx::pointer_samples`] holds the device's full-rate samples. Costs more events.
+    /// Applies to the whole app. Ignored elsewhere (pen input is not implemented there).
+    pub raw_pointer_samples: bool,
 }
 
 impl WindowOptions {
     pub fn new(title: impl Into<String>) -> Self {
-        WindowOptions { title: title.into(), size: (900., 600.), min_size: None, transparent: false, transparent_titlebar: false, traffic_lights: None, vibrancy: false }
+        WindowOptions { title: title.into(), size: (900., 600.), min_size: None, transparent: false, transparent_titlebar: false, traffic_lights: None, vibrancy: false, raw_pointer_samples: false }
     }
 
     pub fn size(mut self, width: f32, height: f32) -> Self {
@@ -227,6 +258,11 @@ impl WindowOptions {
         self.vibrancy = on;
         self
     }
+
+    pub fn raw_pointer_samples(mut self, on: bool) -> Self {
+        self.raw_pointer_samples = on;
+        self
+    }
 }
 
 /// Opens a window titled `title` and runs `app` until the window is closed.
@@ -248,6 +284,7 @@ pub fn run_with(options: WindowOptions, app: impl App) -> Result<()> {
         last_click: None,
         wake_at: None,
         failure: None,
+        pen: None,
     };
     event_loop.run_app(&mut shell).map_err(err("run event loop"))?;
     match shell.failure {
@@ -271,6 +308,7 @@ struct Shell<A: App> {
     last_click: Option<(Instant, (f32, f32), MouseButton, u32)>,
     wake_at: Option<Instant>,
     failure: Option<crate::Error>,
+    pen: Option<crate::pointer::PenInput>,
 }
 
 impl<A: App> Shell<A> {
@@ -278,7 +316,12 @@ impl<A: App> Shell<A> {
     fn dispatch(&mut self, event: Event) {
         let (Some(window), Some(renderer)) = (self.window.as_ref(), self.renderer.as_ref()) else { return };
         let platform = WindowPlatform(window);
-        let mut cx = Cx::new(&mut self.shaper, self.modifiers, renderer.logical_size(), window.scale_factor() as f32, &platform, &mut self.wake_at);
+        // Pen data the platform saw for this pointer event.
+        let (samples, current) = match (&event, self.pen.as_mut()) {
+            (Event::MouseMoved { pos } | Event::MousePressed { pos, .. } | Event::MouseReleased { pos, .. }, Some(pen)) => pen.take(*pos),
+            _ => (Vec::new(), None),
+        };
+        let mut cx = Cx::new(&mut self.shaper, self.modifiers, renderer.logical_size(), window.scale_factor() as f32, &platform, &mut self.wake_at).with_pointer(samples, current);
         self.app.event(event, &mut cx);
         window.request_redraw();
     }
@@ -343,6 +386,7 @@ impl<A: App> ApplicationHandler for Shell<A> {
                 crate::macos::place_traffic_lights(&window, at);
             }
         }
+        self.pen = Some(crate::pointer::PenInput::install(&window, self.options.raw_pointer_samples));
         window.request_redraw();
         self.window = Some(window);
     }

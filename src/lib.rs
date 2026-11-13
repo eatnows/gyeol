@@ -15,6 +15,7 @@ mod gpu;
 #[cfg(feature = "svg")]
 mod icon_render;
 mod layout;
+pub mod pointer;
 pub mod list;
 pub mod renderer;
 pub mod scene;
@@ -31,6 +32,7 @@ pub use error::{Error, Result};
 pub use element::icon;
 pub use event::{Event, Ime, Key, Modifiers, MouseButton, NamedKey, ScrollDelta, SystemTheme};
 pub use input::{cycle_focus, text_input, InputChange, InputStyle, TextInput};
+pub use pointer::{PointerKind, PointerSample};
 pub use renderer::Renderer;
 pub use scene::{BackdropBlur, Capped, Color, Gradient, GradientKind, GradientStop, RadialSize, MAX_GRADIENT_LAYERS, MAX_GRADIENT_STOPS, Path, PathCommand, Quad, Rect, Scene, Shadow, Text, MAX_SHADOWS};
 pub use icon::{FillRule, Icon, IconCommand, IconData, IconFill, IconShape, IconStroke, LineCap, LineJoin};

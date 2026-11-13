@@ -32,7 +32,8 @@ winit = "0.30"
 # Native window chrome tweaks (traffic lights, vibrancy); versions match what winit 0.30 uses.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"
-objc2-app-kit = { version = "0.2", features = ["NSWindow", "NSView", "NSButton", "NSControl", "NSResponder", "NSVisualEffectView", "NSApplication"] }
+block2 = "0.5"
+objc2-app-kit = { version = "0.2", features = ["NSWindow", "NSView", "NSButton", "NSControl", "NSResponder", "NSVisualEffectView", "NSApplication", "NSEvent", "block2"] }
 objc2-foundation = { version = "0.2", features = ["NSGeometry"] }
 
 [[example]]

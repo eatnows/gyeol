@@ -113,9 +113,13 @@ impl<S: View> Host<S> {
         let event = event.clone();
         let Some(laid) = &self.laid else { return };
         let modifiers = cx.modifiers;
-        let mouse_event = |i: usize, pos: (f32, f32), button: MouseButton, click_count: u32| {
+        let (pointer, pointer_pressure, tilt) = cx.pointer_state(true);
+        let (_, released_pressure, _) = cx.pointer_state(false);
+        // `pressed`: whether a button is down at this event (a mouse reports 1 then, a pen its own pressure).
+        let mouse_event = |i: usize, pos: (f32, f32), button: MouseButton, click_count: u32, pressed: bool| {
             let b = laid.bounds_of(i);
-            MouseEvent { pos, local: (pos.0 - b.x, pos.1 - b.y), size: (b.w, b.h), button, click_count, modifiers }
+            let pressure = if pressed { pointer_pressure } else { released_pressure };
+            MouseEvent { pos, local: (pos.0 - b.x, pos.1 - b.y), size: (b.w, b.h), button, pointer, pressure, tilt, click_count, modifiers }
         };
         match event {
             Event::MouseMoved { pos } => {
@@ -124,7 +128,7 @@ impl<S: View> Host<S> {
                 if let Some((capture, button, click_count)) = self.captured {
                     if let Some(i) = laid.resolve(capture) {
                         if let Some(handler) = laid.on_drag(i) {
-                            handler(&mut self.state, cx, mouse_event(i, pos, button, click_count));
+                            handler(&mut self.state, cx, mouse_event(i, pos, button, click_count, true));
                         }
                     }
                 }
@@ -138,7 +142,7 @@ impl<S: View> Host<S> {
                 }
                 if let Some(i) = laid.press_target(pos) {
                     if let Some(handler) = laid.on_mouse_down(i) {
-                        handler(&mut self.state, cx, mouse_event(i, pos, button, click_count));
+                        handler(&mut self.state, cx, mouse_event(i, pos, button, click_count, true));
                     }
                     if laid.captures(i) {
                         self.captured = Some((laid.key_of(i), button, click_count));
@@ -150,7 +154,7 @@ impl<S: View> Host<S> {
                     self.captured = None;
                     if let Some(i) = laid.resolve(capture) {
                         if let Some(handler) = laid.on_mouse_up(i) {
-                            handler(&mut self.state, cx, mouse_event(i, pos, button, click_count));
+                            handler(&mut self.state, cx, mouse_event(i, pos, button, click_count, false));
                         }
                     }
                 }

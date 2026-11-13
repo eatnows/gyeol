@@ -1,4 +1,7 @@
-//! macOS window chrome that winit does not expose: traffic-light placement and window vibrancy.
+//! macOS window chrome that winit does not expose: traffic-light placement and window vibrancy,
+//! plus [`pen`] input.
+pub mod pen;
+
 use objc2::rc::Retained;
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,

@@ -6,6 +6,7 @@ use std::{
 
 use crate::{
     element::Cursor,
+    pointer::PointerSample,
     event::{Event, Ime, Key, Modifiers, MouseButton, ScrollDelta, SystemTheme},
     scene::{Rect, Scene},
     shaper::Shaper,
@@ -60,6 +61,8 @@ pub struct TestHost<S: View> {
     wake_at: Option<Instant>,
     scene: Scene,
     mouse: Option<(f32, f32)>,
+    /// Pen samples to attach to the next pointer event.
+    pointer: Vec<PointerSample>,
 }
 
 impl<S: View> TestHost<S> {
@@ -81,6 +84,7 @@ impl<S: View> TestHost<S> {
             wake_at: None,
             scene: Scene::default(),
             mouse: None,
+            pointer: Vec::new(),
         };
         host.frame();
         host
@@ -161,7 +165,9 @@ impl<S: View> TestHost<S> {
 
     /// Delivers `event`, then paints a frame (the shell redraws after every event too).
     pub fn event(&mut self, event: Event) -> &Scene {
-        let mut cx = Cx::new(&mut self.shaper, self.modifiers, self.size, self.scale, &self.platform, &mut self.wake_at);
+        let samples = std::mem::take(&mut self.pointer);
+        let current = samples.last().copied();
+        let mut cx = Cx::new(&mut self.shaper, self.modifiers, self.size, self.scale, &self.platform, &mut self.wake_at).with_pointer(samples, current);
         self.host.event(event, &mut cx);
         self.frame()
     }
@@ -215,6 +221,35 @@ impl<S: View> TestHost<S> {
     pub fn scroll(&mut self, pos: (f32, f32), delta: ScrollDelta) -> &Scene {
         self.mouse_move(pos);
         self.event(Event::Scroll { delta, pos })
+    }
+
+    /// Delivers a pointer `event` as the platform would when a pen is in use: `samples` (oldest first,
+    /// the last being the event's own reading) are what the app sees through `MouseEvent::pressure`,
+    /// `pointer`, `tilt` and `Cx::pointer_samples`.
+    pub fn pointer_event(&mut self, event: Event, samples: Vec<PointerSample>) -> &Scene {
+        if let Event::MouseMoved { pos } = &event {
+            self.mouse = Some(*pos);
+        }
+        self.pointer = samples;
+        self.event(event)
+    }
+
+    /// A pen touching down at the position of `sample`.
+    pub fn pen_down(&mut self, sample: PointerSample) {
+        let pos = sample.pos;
+        self.pointer_event(Event::MouseMoved { pos }, vec![sample.with_pressure(0.)]);
+        self.pointer_event(Event::MousePressed { button: MouseButton::Left, pos, click_count: 1 }, vec![sample]);
+    }
+
+    /// A pen moving (dragging when it is down) through `samples`; the event is at the last one.
+    pub fn pen_move(&mut self, samples: Vec<PointerSample>) {
+        let pos = samples.last().expect("at least one sample").pos;
+        self.pointer_event(Event::MouseMoved { pos }, samples);
+    }
+
+    /// The pen lifting at `pos`.
+    pub fn pen_up(&mut self, pos: (f32, f32)) {
+        self.pointer_event(Event::MouseReleased { button: MouseButton::Left, pos }, vec![PointerSample::pen(pos, 0.)]);
     }
 
     pub fn key(&mut self, key: Key, text: Option<&str>) -> &Scene {
@@ -669,5 +704,68 @@ mod tests {
         assert_eq!(host.state().outside, 2);
         host.click((110., 40.));
         assert_eq!(host.state().inside_clicks, 0, "and the overlay blocked the click on the panel under it");
+    }
+
+    #[derive(Default)]
+    struct PenPad {
+        log: Vec<(&'static str, crate::PointerKind, f32, Option<(f32, f32)>)>,
+        samples_seen: Vec<usize>,
+    }
+
+    impl View for PenPad {
+        fn view(&self, _cx: &mut Cx) -> Element<PenPad> {
+            div().child(div()
+                .w(200.)
+                .h(200.)
+                .on_mouse_down(|s: &mut PenPad, _, e| s.log.push(("down", e.pointer, e.pressure, e.tilt)))
+                .on_drag(|s: &mut PenPad, _, e| s.log.push(("drag", e.pointer, e.pressure, e.tilt)))
+                .on_mouse_up(|s: &mut PenPad, _, e| s.log.push(("up", e.pointer, e.pressure, e.tilt))))
+        }
+
+        fn event(&mut self, event: &Event, cx: &mut Cx) {
+            if matches!(event, Event::MouseMoved { .. }) {
+                self.samples_seen.push(cx.pointer_samples().len());
+            }
+        }
+    }
+
+    #[test]
+    fn handlers_receive_pen_pressure_tilt_and_kind() {
+        use crate::{PointerKind, PointerSample};
+        let mut h = TestHost::new(PenPad::default(), (300., 300.));
+        h.pen_down(PointerSample::pen((20., 20.), 0.4).tilt(0.5, -0.25));
+        h.pen_move(vec![PointerSample::pen((30., 20.), 0.6).tilt(0.5, -0.25)]);
+        h.pen_up((30., 20.));
+        let log = &h.state().log;
+        assert_eq!(log[0], ("down", PointerKind::Pen, 0.4, Some((0.5, -0.25))));
+        assert_eq!(log[1], ("drag", PointerKind::Pen, 0.6, Some((0.5, -0.25))));
+        assert_eq!((log[2].0, log[2].1, log[2].2), ("up", PointerKind::Pen, 0.), "lifting reports zero pressure");
+    }
+
+    #[test]
+    fn the_eraser_is_told_apart_and_coalesced_samples_reach_cx() {
+        use crate::{PointerKind, PointerSample};
+        let mut h = TestHost::new(PenPad::default(), (300., 300.));
+        h.pen_down(PointerSample::pen((10., 10.), 0.5).eraser());
+        let burst = (1..=5).map(|i| PointerSample::pen((10. + i as f32, 10.), i as f32 / 10.).eraser()).collect::<Vec<_>>();
+        h.pen_move(burst);
+        let log = &h.state().log;
+        assert_eq!(log[1].1, PointerKind::Eraser);
+        assert_eq!(log[1].2, 0.5, "the event reports its own (last) sample");
+        assert_eq!(*h.state().samples_seen.last().unwrap(), 5, "all five samples since the last event");
+    }
+
+    #[test]
+    fn without_pen_data_a_mouse_has_full_pressure_only_while_pressed() {
+        use crate::PointerKind;
+        let mut h = TestHost::new(PenPad::default(), (300., 300.));
+        h.mouse_down((20., 20.));
+        h.mouse_move((40., 20.));
+        h.mouse_up((40., 20.));
+        let log = &h.state().log;
+        assert_eq!(log[0], ("down", PointerKind::Mouse, 1., None));
+        assert_eq!(log[1], ("drag", PointerKind::Mouse, 1., None));
+        assert_eq!(log[2], ("up", PointerKind::Mouse, 0., None));
+        assert!(h.state().samples_seen.iter().all(|n| *n == 0), "no platform samples: the list is empty");
     }
 }

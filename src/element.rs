@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher};
 use crate::{
     icon::IconData,
     event::{Modifiers, MouseButton},
+    pointer::PointerKind,
     scene::{BackdropBlur, Capped, Color, Gradient, Path, Shadow, MAX_GRADIENT_LAYERS, MAX_SHADOWS},
     shell::Cx,
 };
@@ -277,6 +278,13 @@ pub struct MouseEvent {
     /// element's size, wherever the pointer is.
     pub size: (f32, f32),
     pub button: MouseButton,
+    /// What is pointing: a mouse, a pen tip or a pen's eraser. See [`crate::pointer`] for platform support.
+    pub pointer: PointerKind,
+    /// 0 to 1. A mouse reports 1 while a button is down, 0 otherwise; a pen reports its pressure.
+    pub pressure: f32,
+    /// How far a pen leans (x and y, -1 to 1); `None` for a mouse or a pen that cannot tell. Every sample
+    /// since the previous event is in [`Cx::pointer_samples`].
+    pub tilt: Option<(f32, f32)>,
     /// 1 for a single click, 2 for a double click, and so on.
     pub click_count: u32,
     pub modifiers: Modifiers,
