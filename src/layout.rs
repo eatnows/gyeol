@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use taffy::{prelude::*, tree::LayoutOutput, TaffyTree};
 
 use crate::{
-    element::{Align, Cursor, Direction, Element, ElementId, Handler, Justify, Kind, Length, MouseHandler, Overflow, Style},
+    element::{Align, Cursor, Direction, Element, ElementId, Handler, HoverStyle, Justify, Kind, Length, MouseHandler, Overflow, Style},
     scene::{BackdropBlur, Capped, Color, Gradient, Path, Quad, Rect, Scene, Shadow, Text, MAX_GRADIENT_LAYERS, MAX_SHADOWS},
     shaper::{Shaper, TextStyle},
 };
@@ -39,6 +39,9 @@ pub(crate) struct Node<S> {
     parent: Option<usize>,
     background: Option<Color>,
     hover_background: Option<Color>,
+    hover: HoverStyle,
+    /// Whether `text_color` was set on this element itself (descendants inherit it).
+    explicit_text_color: bool,
     gradients: Capped<Gradient, MAX_GRADIENT_LAYERS>,
     shadows: Capped<Shadow, MAX_SHADOWS>,
     inset_shadows: Capped<Shadow, MAX_SHADOWS>,
@@ -264,32 +267,54 @@ pub(crate) fn layout_and_paint<S>(
 
     let laid = Laid { nodes };
     let hovered: Vec<usize> = laid.chain(laid.topmost_at(mouse)).collect();
+    // The text color of node `i`: the nearest hovered ancestor-or-self that overrides it on hover, unless
+    // an element between them sets its own color; otherwise the color it inherited when built.
+    let text_color = |i: usize, inherited: Color| {
+        for a in laid.chain(Some(i)) {
+            if let Some(color) = hovered.contains(&a).then(|| laid.nodes[a].hover.text_color).flatten() {
+                return color;
+            }
+            if laid.nodes[a].explicit_text_color {
+                break;
+            }
+        }
+        inherited
+    };
     let mut scene = Scene { background: Some(background), ..Default::default() };
     let mut thumbs: Vec<(usize, Quad)> = Vec::new();
     for (i, node) in laid.nodes.iter().enumerate() {
         while thumbs.last().is_some_and(|(at, _)| *at <= i) {
             scene.push_quad(thumbs.pop().expect("checked").1);
         }
-        let fill = if hovered.contains(&i) { node.hover_background.or(node.background) } else { node.background };
-        if fill.is_some() || !node.gradients.is_empty() || !node.shadows.is_empty() || !node.inset_shadows.is_empty() || node.backdrop_blur.is_some() || node.border_width > 0. {
+        // Hover overrides (the pointer is over this element or a descendant) replace the normal paint.
+        let hover = hovered.contains(&i).then_some(&node.hover);
+        let fill = match hover {
+            Some(h) => h.background.or(node.hover_background).or(node.background),
+            None => node.background,
+        };
+        let gradients = hover.and_then(|h| h.gradients).unwrap_or(node.gradients);
+        let shadows = hover.and_then(|h| h.shadows).unwrap_or(node.shadows);
+        let inset_shadows = hover.and_then(|h| h.inset_shadows).unwrap_or(node.inset_shadows);
+        let border_color = hover.and_then(|h| h.border_color).unwrap_or(node.border_color);
+        if fill.is_some() || !gradients.is_empty() || !shadows.is_empty() || !inset_shadows.is_empty() || node.backdrop_blur.is_some() || node.border_width > 0. {
             let mut quad = Quad::new(node.bounds, fill.unwrap_or(Color::TRANSPARENT)).rounded_corners(node.radii).clipped(node.clip);
-            quad.gradients = node.gradients;
-            quad.shadows = node.shadows;
-            quad.inset_shadows = node.inset_shadows;
+            quad.gradients = gradients;
+            quad.shadows = shadows;
+            quad.inset_shadows = inset_shadows;
             quad.backdrop_blur = node.backdrop_blur;
             if node.border_width > 0. {
-                quad = quad.bordered(node.border_width, node.border_color);
+                quad = quad.bordered(node.border_width, border_color);
             }
             scene.push_quad(quad);
         }
         if let Some((content, size, color)) = &node.text {
-            scene.push_text(Text::new((node.bounds.x, node.bounds.y), content.clone(), *size, *color).clipped(node.clip));
+            scene.push_text(Text::new((node.bounds.x, node.bounds.y), content.clone(), *size, text_color(i, *color)).clipped(node.clip));
         }
         for path in &node.paths {
             scene.push_path(path.clone().translated(node.bounds.x, node.bounds.y).clipped(node.clip));
         }
         if let Some((data, color)) = &node.icon {
-            scene.push_icon(crate::icon::Icon::new(data.clone(), node.bounds, *color).clipped(node.clip));
+            scene.push_icon(crate::icon::Icon::new(data.clone(), node.bounds, text_color(i, *color)).clipped(node.clip));
         }
         if let (Some(color), true) = (node.scrollbar, node.scroll_max.1 > 0.) {
             let (view_h, content_h) = (node.bounds.h, node.bounds.h + node.scroll_max.1);
@@ -331,6 +356,8 @@ fn build<S>(
         parent,
         background: style.background,
         hover_background: style.hover_background,
+        hover: style.hover,
+        explicit_text_color: style.text_color.is_some(),
         gradients: style.gradients,
         shadows: style.shadows,
         inset_shadows: style.inset_shadows,
@@ -677,6 +704,78 @@ mod tests {
         assert_eq!(clips.len(), 3);
         assert!(clips.iter().all(|c| *c == Some(Rect::new(0., 0., 400., 40.))), "cut off at the container: {clips:?}");
         assert_eq!(laid.click_target((5., 5.)), Some(2), "an icon can be a click target (the first icon is node 2)");
+    }
+
+    #[test]
+    fn a_hover_style_replaces_gradients_shadows_and_borders_only_while_hovered() {
+        let mut shaper = Shaper::new();
+        let (idle_line, glow) = (Color::hex(0x333333), Color::hex(0xff8800));
+        let accent = Gradient::linear(90.).stop(Color::TRANSPARENT).stop(glow).stop(Color::TRANSPARENT);
+        let halo = Shadow::new(0., 0., 12., 2., glow.with_alpha(0.6));
+        let build = || -> Element<()> {
+            div().col().child(
+                div()
+                    .h(2.)
+                    .bg(idle_line)
+                    .border(1., idle_line)
+                    .shadow_layer(Shadow::new(0., 1., 2., 0., Color::hex(0)))
+                    .hover(|h| h.bg_layers([accent]).shadows([halo]).inset_shadows([halo]).border_color(glow).bg(Color::hex(0x111111))),
+            )
+        };
+        let paint = |mouse| layout_and_paint(build(), SIZE, mouse, Color::hex(0xffffff), &mut Shaper::new(), &mut ScrollStore::new()).1;
+        let _ = &mut shaper;
+
+        let idle = paint(NOWHERE);
+        let q = idle.quads().next().unwrap();
+        assert_eq!((q.background, q.border_color), (idle_line, idle_line));
+        assert!(q.gradients.is_empty() && q.shadows.len() == 1 && q.inset_shadows.is_empty());
+
+        let hot = paint((50., 1.));
+        let q = hot.quads().next().unwrap();
+        assert_eq!(q.gradients.as_slice(), &[accent]);
+        assert_eq!(q.shadows.as_slice(), &[halo], "replaced, not added to");
+        assert_eq!(q.inset_shadows.as_slice(), &[halo]);
+        assert_eq!((q.background, q.border_color), (Color::hex(0x111111), glow));
+    }
+
+    #[test]
+    fn an_empty_hover_list_removes_the_layers_and_hover_bg_keeps_working() {
+        let el = || -> Element<()> {
+            div().child(div().h(10.).bg(Color::hex(0x222222)).hover_bg(Color::hex(0x444444)).bg_layer(Gradient::linear(0.).stop(Color::hex(1)).stop(Color::hex(2))).hover(|h| h.bg_layers([])))
+        };
+        let paint = |mouse| layout_and_paint(el(), SIZE, mouse, Color::hex(0xffffff), &mut Shaper::new(), &mut ScrollStore::new()).1;
+        assert_eq!(paint(NOWHERE).quads().next().unwrap().gradients.len(), 1);
+        let hot = paint((5., 5.));
+        let q = hot.quads().next().unwrap();
+        assert!(q.gradients.is_empty());
+        assert_eq!(q.background, Color::hex(0x444444), "hover_bg still applies without a hover background override");
+
+        // A background in the hover style wins over hover_bg.
+        let both = || -> Element<()> { div().child(div().h(10.).bg(Color::hex(0x222222)).hover_bg(Color::hex(0x444444)).hover(|h| h.bg(Color::hex(0x666666)))) };
+        let scene = layout_and_paint(both(), SIZE, (5., 5.), Color::hex(0xffffff), &mut Shaper::new(), &mut ScrollStore::new()).1;
+        assert_eq!(scene.quads().next().unwrap().background, Color::hex(0x666666));
+    }
+
+    #[test]
+    fn a_hover_text_color_reaches_text_and_icons_below_unless_they_set_their_own() {
+        let (idle, hot, own) = (Color::hex(0x888888), Color::hex(0xffffff), Color::hex(0x00ff00));
+        let el = || -> Element<()> {
+            div().child(
+                div()
+                    .h(60.)
+                    .text_color(idle)
+                    .hover(|h| h.text_color(hot))
+                    .child(text("inherits"))
+                    .child(crate::element::icon_from(square_icon(16.)))
+                    .child(text("own").text_color(own)),
+            )
+        };
+        let colors = |mouse| {
+            let scene = layout_and_paint(el(), SIZE, mouse, Color::hex(0xffffff), &mut Shaper::new(), &mut ScrollStore::new()).1;
+            (scene.texts().map(|t| t.color).collect::<Vec<_>>(), scene.icons().map(|i| i.color).collect::<Vec<_>>())
+        };
+        assert_eq!(colors(NOWHERE), (vec![idle, own], vec![idle]));
+        assert_eq!(colors((5., 5.)), (vec![hot, own], vec![hot]), "text and icon follow the hover color, the explicit one keeps its own");
     }
 
     fn list(rows: usize) -> Element<()> {

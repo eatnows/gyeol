@@ -569,4 +569,31 @@ mod tests {
         let (_, down) = *host.state().events.last().unwrap();
         assert_eq!((down.size, down.local), ((200., 20.), (100., 10.)), "scrolling included");
     }
+
+    struct Divider;
+
+    impl View for Divider {
+        fn view(&self, _: &mut Cx) -> Element<Self> {
+            let glow = Color::hex(0xff8800);
+            div().child(
+                div()
+                    .w(300.)
+                    .h(2.)
+                    .bg(Color::hex(0x444444))
+                    .hover(|h| h.bg_layers([crate::scene::Gradient::linear(90.).stop(Color::TRANSPARENT).stop(glow).stop(Color::TRANSPARENT)]).shadows([crate::scene::Shadow::new(0., 0., 10., 0., glow)])),
+            )
+        }
+    }
+
+    #[test]
+    fn hover_style_appears_when_the_pointer_enters_and_goes_when_it_leaves() {
+        let mut host = TestHost::new(Divider, (400., 100.));
+        let quad = |host: &TestHost<Divider>| *host.scene().quads().next().unwrap();
+        host.mouse_move((350., 50.)); // the host starts with the pointer at (0, 0), which is over the divider
+        assert!(quad(&host).gradients.is_empty() && quad(&host).shadows.is_empty());
+        host.mouse_move((100., 1.));
+        assert_eq!((quad(&host).gradients.len(), quad(&host).shadows.len()), (1, 1), "entered");
+        host.mouse_move((350., 50.));
+        assert!(quad(&host).gradients.is_empty() && quad(&host).shadows.is_empty(), "left");
+    }
 }

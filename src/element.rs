@@ -128,6 +128,8 @@ pub struct Style {
     /// Corner radii: top-left, top-right, bottom-right, bottom-left.
     pub radii: [f32; 4],
     pub hover_background: Option<Color>,
+    /// Paint overrides applied while the pointer is over the element or one of its descendants.
+    pub hover: HoverStyle,
     /// Inherited by descendants that do not set their own.
     pub text_color: Option<Color>,
     pub text_size: Option<f32>,
@@ -172,6 +174,7 @@ impl Default for Style {
             border_color: Color::TRANSPARENT,
             radii: [0.; 4],
             hover_background: None,
+            hover: HoverStyle::default(),
             text_color: None,
             text_size: None,
             text_family: None,
@@ -182,6 +185,65 @@ impl Default for Style {
             overflow_y: Overflow::Visible,
             scrollbar: None,
         }
+    }
+}
+
+/// Paint-affecting style that replaces the element's own while it is hovered (the pointer is over it
+/// or a descendant, like CSS `:hover`). Everything unset keeps the normal style. Set through
+/// [`Element::hover`].
+///
+/// Layer lists replace the normal ones whole, so `bg_layers([])` removes the gradients on hover
+/// and `shadows([glow])` swaps the shadows for one glow.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HoverStyle {
+    pub background: Option<Color>,
+    pub gradients: Option<Capped<Gradient, MAX_GRADIENT_LAYERS>>,
+    pub shadows: Option<Capped<Shadow, MAX_SHADOWS>>,
+    pub inset_shadows: Option<Capped<Shadow, MAX_SHADOWS>>,
+    pub border_color: Option<Color>,
+    /// Replaces the element's own [`Element::opacity`] while hovered.
+    pub opacity: Option<f32>,
+    /// The text color of the element's text and icons, and of descendants that do not set their own.
+    pub text_color: Option<Color>,
+}
+
+impl HoverStyle {
+    pub fn bg(mut self, color: Color) -> Self {
+        self.background = Some(color);
+        self
+    }
+
+    /// Replaces the gradient layers (bottom first); an empty list removes them.
+    pub fn bg_layers(mut self, layers: impl IntoIterator<Item = Gradient>) -> Self {
+        self.gradients = Some(layers.into_iter().collect());
+        self
+    }
+
+    /// Replaces the outer shadows; an empty list removes them.
+    pub fn shadows(mut self, shadows: impl IntoIterator<Item = Shadow>) -> Self {
+        self.shadows = Some(shadows.into_iter().collect());
+        self
+    }
+
+    /// Replaces the inset shadows; an empty list removes them.
+    pub fn inset_shadows(mut self, shadows: impl IntoIterator<Item = Shadow>) -> Self {
+        self.inset_shadows = Some(shadows.into_iter().collect());
+        self
+    }
+
+    pub fn border_color(mut self, color: Color) -> Self {
+        self.border_color = Some(color);
+        self
+    }
+
+    pub fn opacity(mut self, opacity: f32) -> Self {
+        self.opacity = Some(opacity.clamp(0., 1.));
+        self
+    }
+
+    pub fn text_color(mut self, color: Color) -> Self {
+        self.text_color = Some(color);
+        self
     }
 }
 
@@ -609,6 +671,13 @@ impl<S> Element<S> {
     /// deviation in logical pixels.
     pub fn backdrop_blur(mut self, radius: f32, saturate: f32) -> Self {
         self.style.backdrop_blur = Some(BackdropBlur { radius, saturate });
+        self
+    }
+
+    /// Overrides paint while hovered: `div().hover(|h| h.bg_layers([glow]).shadows([halo]))`. The
+    /// element repaints when the pointer enters and leaves. Works alongside [`Element::hover_bg`].
+    pub fn hover(mut self, style: impl FnOnce(HoverStyle) -> HoverStyle) -> Self {
+        self.style.hover = style(self.style.hover);
         self
     }
 

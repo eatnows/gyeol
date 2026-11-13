@@ -24,7 +24,7 @@ pub mod testing;
 mod text;
 pub mod view;
 
-pub use element::{div, icon_from, paths, text, Align, Cursor, Direction, Element, ElementId, Justify, Length, MouseEvent, Overflow, Style};
+pub use element::{div, icon_from, paths, text, Align, Cursor, Direction, Element, ElementId, HoverStyle, Justify, Length, MouseEvent, Overflow, Style};
 pub use error::{Error, Result};
 #[cfg(feature = "svg")]
 pub use element::icon;
