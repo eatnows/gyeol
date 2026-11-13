@@ -88,12 +88,13 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// Sets up the GPU for `window`. Blocks until the adapter and device are ready.
-    pub fn new(window: Arc<Window>) -> Result<Self> {
-        pollster::block_on(Self::new_async(window))
+    /// Sets up the GPU for `window`. Blocks until the adapter and device are ready. With `transparent`,
+    /// the surface blends with what is behind the window wherever the scene leaves it clear.
+    pub fn new(window: Arc<Window>, transparent: bool) -> Result<Self> {
+        pollster::block_on(Self::new_async(window, transparent))
     }
 
-    async fn new_async(window: Arc<Window>) -> Result<Self> {
+    async fn new_async(window: Arc<Window>, transparent: bool) -> Result<Self> {
         let size = window.inner_size();
         let scale_factor = window.scale_factor() as f32;
 
@@ -118,6 +119,15 @@ impl Renderer {
         let caps = surface.get_capabilities(&adapter);
         if let Some(format) = caps.formats.iter().copied().find(|f| !f.is_srgb()) {
             config.format = format;
+        }
+        if transparent {
+            // Quads are blended premultiplied, so prefer the matching mode; Metal only offers PostMultiplied,
+            // which just makes its layer non-opaque and is composited premultiplied as well.
+            use wgpu::CompositeAlphaMode::{PostMultiplied, PreMultiplied};
+            config.alpha_mode = [PreMultiplied, PostMultiplied]
+                .into_iter()
+                .find(|m| caps.alpha_modes.contains(m))
+                .ok_or_else(|| Error("the surface cannot be transparent".into()))?;
         }
         surface.configure(&device, &config);
 
@@ -244,12 +254,17 @@ impl Renderer {
         self.quad_instances.write(&self.device, &self.queue, bytemuck::cast_slice(&quads));
         self.path_vertices.write(&self.device, &self.queue, bytemuck::cast_slice(&paths));
 
-        let clear = scene.background.map_or(wgpu::Color::BLACK, |c| wgpu::Color {
-            r: c.r as f64,
-            g: c.g as f64,
-            b: c.b as f64,
-            a: c.a as f64,
-        });
+        // On a transparent surface the clear color is premultiplied so a translucent background shows the
+        // desktop through; with no background it starts fully clear. An opaque surface is cleared as before.
+        let transparent = self.config.alpha_mode != wgpu::CompositeAlphaMode::Opaque;
+        let clear = match scene.background {
+            None if transparent => wgpu::Color::TRANSPARENT,
+            None => wgpu::Color::BLACK,
+            Some(c) => {
+                let k = if transparent { c.a } else { 1. };
+                wgpu::Color { r: (c.r * k) as f64, g: (c.g * k) as f64, b: (c.b * k) as f64, a: c.a as f64 }
+            }
+        };
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gyeolui frame") });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

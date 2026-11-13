@@ -175,11 +175,14 @@ pub struct WindowOptions {
     pub size: (f32, f32),
     /// The smallest size the user can resize to.
     pub min_size: Option<(f32, f32)>,
+    /// A window whose unpainted (clear) parts show what is behind it; pair with a `Scene` background of
+    /// `None` or a translucent color.
+    pub transparent: bool,
 }
 
 impl WindowOptions {
     pub fn new(title: impl Into<String>) -> Self {
-        WindowOptions { title: title.into(), size: (900., 600.), min_size: None }
+        WindowOptions { title: title.into(), size: (900., 600.), min_size: None, transparent: false }
     }
 
     pub fn size(mut self, width: f32, height: f32) -> Self {
@@ -189,6 +192,11 @@ impl WindowOptions {
 
     pub fn min_size(mut self, width: f32, height: f32) -> Self {
         self.min_size = Some((width, height));
+        self
+    }
+
+    pub fn transparent(mut self, transparent: bool) -> Self {
+        self.transparent = transparent;
         self
     }
 }
@@ -272,6 +280,7 @@ impl<A: App> ApplicationHandler for Shell<A> {
         }
         let mut attributes = Window::default_attributes()
             .with_title(self.options.title.as_str())
+            .with_transparent(self.options.transparent)
             .with_inner_size(LogicalSize::new(self.options.size.0, self.options.size.1));
         if let Some((w, h)) = self.options.min_size {
             attributes = attributes.with_min_inner_size(LogicalSize::new(w, h));
@@ -284,7 +293,7 @@ impl<A: App> ApplicationHandler for Shell<A> {
                 return;
             }
         };
-        match Renderer::new(window.clone()) {
+        match Renderer::new(window.clone(), self.options.transparent) {
             Ok(renderer) => self.renderer = Some(renderer),
             Err(e) => {
                 self.failure = Some(e);
