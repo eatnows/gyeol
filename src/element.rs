@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 
 use crate::{
     event::{Modifiers, MouseButton},
-    scene::{BackdropBlur, Capped, Color, Gradient, Path, Shadow, MAX_GRADIENT_LAYERS},
+    scene::{BackdropBlur, Capped, Color, Gradient, Path, Shadow, MAX_GRADIENT_LAYERS, MAX_SHADOWS},
     shell::Cx,
 };
 
@@ -117,8 +117,10 @@ pub struct Style {
     pub background: Option<Color>,
     /// Gradient layers over `background`, bottom first.
     pub gradients: Capped<Gradient, MAX_GRADIENT_LAYERS>,
-    pub shadow: Option<Shadow>,
-    pub inset_shadow: Option<Shadow>,
+    /// Outer shadows, bottom first.
+    pub shadows: Capped<Shadow, MAX_SHADOWS>,
+    /// Inset shadows, bottom first.
+    pub inset_shadows: Capped<Shadow, MAX_SHADOWS>,
     pub backdrop_blur: Option<BackdropBlur>,
     pub border_width: f32,
     pub border_color: Color,
@@ -162,8 +164,8 @@ impl Default for Style {
             justify: None,
             background: None,
             gradients: Capped::default(),
-            shadow: None,
-            inset_shadow: None,
+            shadows: Capped::default(),
+            inset_shadows: Capped::default(),
             backdrop_blur: None,
             border_width: 0.,
             border_color: Color::TRANSPARENT,
@@ -534,15 +536,44 @@ impl<S> Element<S> {
         self
     }
 
-    /// Drops a blurred shadow behind the element (CSS `box-shadow: x y blur color`).
+    /// Sets the one blurred drop shadow (CSS `box-shadow: x y blur color`), replacing any set so far.
+    /// For a spread or several shadows use [`Element::shadow_layer`] / [`Element::shadows`].
     pub fn shadow(mut self, x: f32, y: f32, blur: f32, color: Color) -> Self {
-        self.style.shadow = Some(Shadow { offset: (x, y), blur, color });
+        self.style.shadows.clear();
+        self.style.shadows.push(Shadow::new(x, y, blur, 0., color));
         self
     }
 
-    /// Draws a shadow or highlight inside the element (CSS `box-shadow: inset x y blur color`).
+    /// Adds an outer shadow over the ones added so far (up to 4). CSS lists the top shadow first; here
+    /// the first added is at the bottom.
+    pub fn shadow_layer(mut self, shadow: Shadow) -> Self {
+        self.style.shadows.push(shadow);
+        self
+    }
+
+    /// Replaces the outer shadows, bottom first.
+    pub fn shadows(mut self, shadows: impl IntoIterator<Item = Shadow>) -> Self {
+        self.style.shadows = shadows.into_iter().collect();
+        self
+    }
+
+    /// Sets the one inner shadow or highlight (CSS `box-shadow: inset x y blur color`), replacing any
+    /// set so far. For a spread or several use [`Element::inset_shadow_layer`] / [`Element::inset_shadows`].
     pub fn inset_shadow(mut self, x: f32, y: f32, blur: f32, color: Color) -> Self {
-        self.style.inset_shadow = Some(Shadow { offset: (x, y), blur, color });
+        self.style.inset_shadows.clear();
+        self.style.inset_shadows.push(Shadow::new(x, y, blur, 0., color));
+        self
+    }
+
+    /// Adds an inset shadow over the ones added so far (up to 4).
+    pub fn inset_shadow_layer(mut self, shadow: Shadow) -> Self {
+        self.style.inset_shadows.push(shadow);
+        self
+    }
+
+    /// Replaces the inset shadows, bottom first.
+    pub fn inset_shadows(mut self, shadows: impl IntoIterator<Item = Shadow>) -> Self {
+        self.style.inset_shadows = shadows.into_iter().collect();
         self
     }
 

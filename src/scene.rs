@@ -241,12 +241,27 @@ impl Gradient {
     }
 }
 
-/// A blurred, offset copy of a quad's shape. `blur` is a CSS-style blur radius (gaussian sigma = blur / 2).
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Most outer shadows, and most inset shadows, on one [`Quad`]; extra ones are ignored.
+pub const MAX_SHADOWS: usize = 4;
+
+/// One CSS `box-shadow`: `offset-x offset-y blur-radius spread-radius color`, outer or inset.
+///
+/// `blur` is the CSS blur radius, a gaussian with standard deviation `blur / 2`; `0` is a hard edge.
+/// `spread` grows the shadow's shape on every side (shrinks it when negative; an inset shadow's
+/// spread shrinks the lit area instead).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Shadow {
     pub offset: (f32, f32),
     pub blur: f32,
+    pub spread: f32,
     pub color: Color,
+}
+
+impl Shadow {
+    /// `box-shadow: x y blur spread color`.
+    pub fn new(x: f32, y: f32, blur: f32, spread: f32, color: Color) -> Shadow {
+        Shadow { offset: (x, y), blur, spread, color }
+    }
 }
 
 /// A CSS `backdrop-filter: blur(radius) saturate(saturate)`: what is already painted behind a quad is
@@ -268,10 +283,12 @@ pub struct Quad {
     /// Gradient layers painted over `background`, first (index 0) at the bottom. CSS lists the top
     /// layer first, so reverse the order when porting a `background:` list.
     pub gradients: Capped<Gradient, MAX_GRADIENT_LAYERS>,
-    /// Drawn behind the quad, only outside its shape.
-    pub shadow: Option<Shadow>,
-    /// Drawn inside the quad (inside its border), clipped to its rounded shape.
-    pub inset_shadow: Option<Shadow>,
+    /// Outer shadows (CSS `box-shadow`), drawn behind the quad and only outside its shape. First
+    /// (index 0) at the bottom; CSS lists the top shadow first, so reverse the order when porting.
+    pub shadows: Capped<Shadow, MAX_SHADOWS>,
+    /// Inset shadows (CSS `box-shadow: inset ...`), drawn over the fill, inside the border and clipped
+    /// to the rounded shape. First (index 0) at the bottom.
+    pub inset_shadows: Capped<Shadow, MAX_SHADOWS>,
     /// Blurs and saturates what is behind the quad; the fill (usually translucent) is drawn over it.
     pub backdrop_blur: Option<BackdropBlur>,
     pub border_color: Color,
@@ -284,7 +301,7 @@ pub struct Quad {
 
 impl Quad {
     pub fn new(bounds: Rect, background: Color) -> Quad {
-        Quad { bounds, background, gradients: Capped::default(), shadow: None, inset_shadow: None, backdrop_blur: None, border_color: Color::TRANSPARENT, border_width: 0., corner_radii: [0.; 4], clip: None }
+        Quad { bounds, background, gradients: Capped::default(), shadows: Capped::default(), inset_shadows: Capped::default(), backdrop_blur: None, border_color: Color::TRANSPARENT, border_width: 0., corner_radii: [0.; 4], clip: None }
     }
 
     pub fn rounded(mut self, radius: f32) -> Quad {
@@ -324,9 +341,17 @@ impl Quad {
         self
     }
 
-    /// Adds an inner shadow or highlight (CSS `box-shadow: inset x y blur color`).
+    /// Sets the one inner shadow or highlight (CSS `box-shadow: inset x y blur color`), replacing any
+    /// inset shadows. For several, or a spread, use [`Quad::inset_shadow_layer`].
     pub fn inset_shadowed(mut self, x: f32, y: f32, blur: f32, color: Color) -> Quad {
-        self.inset_shadow = Some(Shadow { offset: (x, y), blur, color });
+        self.inset_shadows.clear();
+        self.inset_shadows.push(Shadow::new(x, y, blur, 0., color));
+        self
+    }
+
+    /// Adds an inset shadow over the ones added so far. At most [`MAX_SHADOWS`] are kept.
+    pub fn inset_shadow_layer(mut self, shadow: Shadow) -> Quad {
+        self.inset_shadows.push(shadow);
         self
     }
 
@@ -336,9 +361,17 @@ impl Quad {
         self
     }
 
-    /// Adds an outer drop shadow behind the quad (CSS `box-shadow: x y blur color`).
+    /// Sets the one outer drop shadow (CSS `box-shadow: x y blur color`), replacing any outer shadows.
+    /// For several, or a spread, use [`Quad::shadow_layer`].
     pub fn shadowed(mut self, x: f32, y: f32, blur: f32, color: Color) -> Quad {
-        self.shadow = Some(Shadow { offset: (x, y), blur, color });
+        self.shadows.clear();
+        self.shadows.push(Shadow::new(x, y, blur, 0., color));
+        self
+    }
+
+    /// Adds an outer shadow over the ones added so far. At most [`MAX_SHADOWS`] are kept.
+    pub fn shadow_layer(mut self, shadow: Shadow) -> Quad {
+        self.shadows.push(shadow);
         self
     }
 }
@@ -488,16 +521,16 @@ mod tests {
     fn a_quad_shadow_is_recorded_and_defaults_to_none() {
         let black = Color::hex(0).with_alpha(0.3);
         let quad = Quad::new(Rect::new(0., 0., 10., 10.), black);
-        assert_eq!(quad.shadow, None);
-        assert_eq!(quad.shadowed(0., 8., 24., black).shadow, Some(Shadow { offset: (0., 8.), blur: 24., color: black }));
+        assert!(quad.shadows.is_empty());
+        assert_eq!(quad.shadowed(0., 8., 24., black).shadows.as_slice(), &[Shadow::new(0., 8., 24., 0., black)]);
     }
 
     #[test]
     fn a_quad_inset_shadow_is_separate_from_the_outer_shadow() {
         let white = Color::hex(0xffffff).with_alpha(0.6);
         let quad = Quad::new(Rect::new(0., 0., 10., 10.), white).inset_shadowed(0., 1., 0., white);
-        assert_eq!(quad.inset_shadow, Some(Shadow { offset: (0., 1.), blur: 0., color: white }));
-        assert_eq!(quad.shadow, None);
+        assert_eq!(quad.inset_shadows.as_slice(), &[Shadow::new(0., 1., 0., 0., white)]);
+        assert!(quad.shadows.is_empty());
     }
 
     #[test]

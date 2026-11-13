@@ -21,19 +21,17 @@ struct QuadInstance {
     border_color: [f32; 4],
     radii: [f32; 4],
     border_width: f32,
-    /// `[offset, layer count, unused, unused]`: where this quad's gradient layers start in the frame's
-    /// `extras` buffer, counted in `vec4`s, and how many there are.
+    /// `[offset, gradient layers, outer shadows, inset shadows]`: where this quad's records start in the
+    /// frame's `extras` buffer, counted in `vec4`s, and how many of each follow, in that order.
     extras: [u32; 4],
-    /// `[offset x, offset y, blur, unused]`.
-    shadow: [f32; 4],
-    shadow_color: [f32; 4],
-    inset: [f32; 4],
-    inset_color: [f32; 4],
+    /// How far the outer shadows reach past the box, in logical pixels.
+    pad: f32,
     /// `[blur radius, saturate]`; only read when the quad has a backdrop blur.
     backdrop: [f32; 2],
 }
 
 /// `vec4`s one gradient layer takes in the extras buffer: 2 of geometry, 2 of stop positions, 8 colors.
+/// (A shadow takes 2: offset/blur/spread and color.)
 const LAYER_VEC4S: usize = 12;
 
 /// Appends `gradient`'s layer record to `out` (the layout `rect.wgsl` reads); `false` when it has no stops.
@@ -88,6 +86,12 @@ impl QuadInstance {
     fn new(q: &Quad, extras: &mut Vec<[f32; 4]>) -> Self {
         let offset = extras.len() as u32;
         let layers = q.gradients.iter().filter(|g| encode_gradient(g, q.bounds, extras)).count() as u32;
+        for shadow in q.shadows.iter().chain(q.inset_shadows.iter()) {
+            extras.push([shadow.offset.0, shadow.offset.1, shadow.blur.max(0.), shadow.spread]);
+            extras.push(shadow.color.to_array());
+        }
+        // A gaussian is negligible past 3 sigma = 1.5 blur radii.
+        let pad = q.shadows.iter().map(|s| s.blur.max(0.) * 1.5 + s.spread.max(0.) + s.offset.0.abs().max(s.offset.1.abs()) + 1.).fold(0., f32::max);
         QuadInstance {
             pos: [q.bounds.x, q.bounds.y],
             size: [q.bounds.w, q.bounds.h],
@@ -95,11 +99,8 @@ impl QuadInstance {
             border_color: q.border_color.to_array(),
             radii: q.corner_radii,
             border_width: q.border_width,
-            extras: [offset, layers, 0, 0],
-            shadow: q.shadow.map_or([0.; 4], |s| [s.offset.0, s.offset.1, s.blur, 0.]),
-            shadow_color: q.shadow.map_or([0.; 4], |s| s.color.to_array()),
-            inset: q.inset_shadow.map_or([0.; 4], |s| [s.offset.0, s.offset.1, s.blur, 0.]),
-            inset_color: q.inset_shadow.map_or([0.; 4], |s| s.color.to_array()),
+            extras: [offset, layers, q.shadows.len() as u32, q.inset_shadows.len() as u32],
+            pad,
             backdrop: q.backdrop_blur.map_or([0.; 2], |b| [b.radius, b.saturate]),
         }
     }
@@ -752,7 +753,7 @@ fn create_backdrop_pipelines(device: &wgpu::Device, format: wgpu::TextureFormat,
         wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: std::mem::offset_of!(QuadInstance, pos) as u64, shader_location: 0 },
         wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: std::mem::offset_of!(QuadInstance, size) as u64, shader_location: 1 },
         wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: std::mem::offset_of!(QuadInstance, radii) as u64, shader_location: 4 },
-        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: std::mem::offset_of!(QuadInstance, backdrop) as u64, shader_location: 12 },
+        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: std::mem::offset_of!(QuadInstance, backdrop) as u64, shader_location: 8 },
     ];
     let make = |label: &str, vs: &str, fs: &str, buffers: &[Option<wgpu::VertexBufferLayout<'_>>], blend: Option<wgpu::BlendState>| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -884,7 +885,7 @@ fn create_quad_pipeline(
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &wgpu::vertex_attr_array![
                     0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32,
-                    6 => Uint32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4, 12 => Float32x2,
+                    6 => Uint32x4, 7 => Float32, 8 => Float32x2,
                 ],
             })],
         },

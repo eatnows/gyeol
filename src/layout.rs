@@ -5,7 +5,7 @@ use taffy::{prelude::*, tree::LayoutOutput, TaffyTree};
 
 use crate::{
     element::{Align, Cursor, Direction, Element, ElementId, Handler, Justify, Kind, Length, MouseHandler, Overflow, Style},
-    scene::{BackdropBlur, Capped, Color, Gradient, RadialSize, MAX_GRADIENT_LAYERS, Path, Quad, Rect, Scene, Shadow, Text},
+    scene::{BackdropBlur, Capped, Color, Gradient, Path, Quad, Rect, Scene, Shadow, Text, MAX_GRADIENT_LAYERS, MAX_SHADOWS},
     shaper::{Shaper, TextStyle},
 };
 
@@ -40,8 +40,8 @@ pub(crate) struct Node<S> {
     background: Option<Color>,
     hover_background: Option<Color>,
     gradients: Capped<Gradient, MAX_GRADIENT_LAYERS>,
-    shadow: Option<Shadow>,
-    inset_shadow: Option<Shadow>,
+    shadows: Capped<Shadow, MAX_SHADOWS>,
+    inset_shadows: Capped<Shadow, MAX_SHADOWS>,
     backdrop_blur: Option<BackdropBlur>,
     border_width: f32,
     border_color: Color,
@@ -269,11 +269,11 @@ pub(crate) fn layout_and_paint<S>(
             scene.push_quad(thumbs.pop().expect("checked").1);
         }
         let fill = if hovered.contains(&i) { node.hover_background.or(node.background) } else { node.background };
-        if fill.is_some() || !node.gradients.is_empty() || node.shadow.is_some() || node.inset_shadow.is_some() || node.backdrop_blur.is_some() || node.border_width > 0. {
+        if fill.is_some() || !node.gradients.is_empty() || !node.shadows.is_empty() || !node.inset_shadows.is_empty() || node.backdrop_blur.is_some() || node.border_width > 0. {
             let mut quad = Quad::new(node.bounds, fill.unwrap_or(Color::TRANSPARENT)).rounded_corners(node.radii).clipped(node.clip);
             quad.gradients = node.gradients;
-            quad.shadow = node.shadow;
-            quad.inset_shadow = node.inset_shadow;
+            quad.shadows = node.shadows;
+            quad.inset_shadows = node.inset_shadows;
             quad.backdrop_blur = node.backdrop_blur;
             if node.border_width > 0. {
                 quad = quad.bordered(node.border_width, node.border_color);
@@ -327,8 +327,8 @@ fn build<S>(
         background: style.background,
         hover_background: style.hover_background,
         gradients: style.gradients,
-        shadow: style.shadow,
-        inset_shadow: style.inset_shadow,
+        shadows: style.shadows,
+        inset_shadows: style.inset_shadows,
         backdrop_blur: style.backdrop_blur,
         border_width: style.border_width,
         border_color: style.border_color,
@@ -568,7 +568,7 @@ mod tests {
         let color = Color::hex(0x000000).with_alpha(0.25);
         let (_, scene) = lay(div().w(50.).h(50.).shadow(0., 4., 12., color), &mut shaper);
         let quad = scene.quads().next().expect("a shadow alone still paints a quad");
-        assert_eq!(quad.shadow, Some(Shadow { offset: (0., 4.), blur: 12., color }));
+        assert_eq!(quad.shadows.as_slice(), &[Shadow::new(0., 4., 12., 0., color)]);
     }
 
     #[test]
@@ -577,8 +577,8 @@ mod tests {
         let white = Color::hex(0xffffff).with_alpha(0.6);
         let (_, scene) = lay(div().w(50.).h(50.).bg(Color::hex(0x336699)).inset_shadow(0., 1., 0., white), &mut shaper);
         let quad = scene.quads().next().unwrap();
-        assert_eq!(quad.inset_shadow, Some(Shadow { offset: (0., 1.), blur: 0., color: white }));
-        assert_eq!(quad.shadow, None);
+        assert_eq!(quad.inset_shadows.as_slice(), &[Shadow::new(0., 1., 0., 0., white)]);
+        assert!(quad.shadows.is_empty());
     }
 
     #[test]
@@ -596,7 +596,7 @@ mod tests {
     #[test]
     fn background_layers_stack_in_the_order_given_over_the_background_color() {
         let mut shaper = Shaper::new();
-        let glow = Gradient::radial((0.1, 0.1), RadialSize::Ellipse(500., 360.)).stop(Color::hex(0xff00ff)).stop_at(Color::TRANSPARENT, 0.7);
+        let glow = Gradient::radial((0.1, 0.1), crate::scene::RadialSize::Ellipse(500., 360.)).stop(Color::hex(0xff00ff)).stop_at(Color::TRANSPARENT, 0.7);
         let base = Gradient::linear(160.).stop(Color::hex(0x111122)).stop(Color::hex(0x221133));
         let el = div().w(50.).h(50.).bg(Color::hex(0x000000)).bg_layer(base).bg_layer(glow);
         let (_, scene) = lay(el, &mut shaper);
@@ -609,6 +609,20 @@ mod tests {
         let (_, scene) = lay(div().w(50.).h(50.).bg(Color::hex(0)).bg_gradient(90., Color::hex(1), Color::hex(2)), &mut shaper);
         let quad = scene.quads().next().unwrap();
         assert_eq!((quad.background, quad.gradients.len()), (Color::TRANSPARENT, 1), "bg_gradient replaces the color");
+    }
+
+    #[test]
+    fn several_shadows_with_spreads_reach_the_quad_in_order() {
+        let mut shaper = Shaper::new();
+        let (a, b) = (Shadow::new(0., 2., 4., 0., Color::hex(0)), Shadow::new(0., 30., 80., -10., Color::hex(0x111111)));
+        let inner = Shadow::new(0., 1., 0., 0., Color::hex(0xffffff));
+        let el = div().w(50.).h(50.).shadow_layer(a).shadow_layer(b).inset_shadows([inner, inner]);
+        let (_, scene) = lay(el, &mut shaper);
+        let quad = scene.quads().next().unwrap();
+        assert_eq!(quad.shadows.as_slice(), &[a, b]);
+        assert_eq!(quad.inset_shadows.len(), 2);
+        let (_, scene) = lay(div().w(50.).h(50.).shadow_layer(a).shadow(1., 1., 1., Color::hex(0)), &mut shaper);
+        assert_eq!(scene.quads().next().unwrap().shadows.len(), 1, "the old call replaces");
     }
 
     fn list(rows: usize) -> Element<()> {

@@ -129,7 +129,7 @@ fn finish(mut pixels: Vec<u8>, renderer: &Renderer, options: &Options) -> Image 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{Gradient, Quad, RadialSize, Rect};
+    use crate::scene::{Gradient, Quad, RadialSize, Rect, Shadow};
 
     /// The image, or `None` (with a note) on a machine with no GPU adapter.
     fn render(scene: &Scene, size: (f32, f32), scale: f32, background: Background) -> Option<Image> {
@@ -325,5 +325,80 @@ mod tests {
         let Some(image) = render(&scene, (200., 100.), 1., solid(0xffffff)) else { return };
         assert!(close(image.pixel(100, 50), [255, 255, 0], 6), "glow on top: {:?}", image.pixel(100, 50));
         assert!(close(image.pixel(10, 50), [0, 0, 128], 3), "base over the red background: {:?}", image.pixel(10, 50));
+    }
+
+    const WHITE: Color = Color::hex(0xffffff);
+
+    fn on_white(quad: Quad, size: (f32, f32), scale: f32) -> Option<Image> {
+        let mut scene = Scene { background: Some(WHITE), ..Default::default() };
+        scene.push_quad(quad);
+        render(&scene, size, scale, solid(0xffffff))
+    }
+
+    #[test]
+    fn several_outer_shadows_are_all_drawn() {
+        // Two hard shadows pushed to opposite sides of a 40px box.
+        let quad = Quad::new(Rect::new(80., 40., 40., 40.), Color::hex(0x808080))
+            .shadow_layer(Shadow::new(-50., 0., 0., 0., Color::hex(0xff0000)))
+            .shadow_layer(Shadow::new(50., 0., 0., 0., Color::hex(0x0000ff)));
+        let Some(image) = on_white(quad, (200., 120.), 1.) else { return };
+        assert!(close(image.pixel(50, 60), [255, 0, 0], 3), "left shadow: {:?}", image.pixel(50, 60));
+        assert!(close(image.pixel(150, 60), [0, 0, 255], 3), "right shadow: {:?}", image.pixel(150, 60));
+        assert!(close(image.pixel(100, 60), [128, 128, 128], 3), "the box covers its own shadows");
+        assert!(close(image.pixel(100, 110), [255, 255, 255], 1), "nothing elsewhere");
+    }
+
+    #[test]
+    fn an_outer_shadow_falls_off_like_a_gaussian_with_sigma_half_the_blur() {
+        // A big box with a 20px blur (sigma 10): the shadow is half strong at the edge, then fades as
+        // 1 - Phi(d / sigma): 16% at 10px out, 2% at 20px.
+        let quad = Quad::new(Rect::new(100., 100., 200., 100.), WHITE).shadowed(0., 0., 20., Color::hex(0x000000));
+        let Some(image) = on_white(quad, (400., 300.), 1.) else { return };
+        let at = |dy: u32| image.pixel(200, 100 - dy)[0] as i32; // above the top edge, away from corners
+        for (d, expected) in [(1, 138), (10, 214), (20, 249)] {
+            assert!((at(d) - expected).abs() <= 10, "{d}px out: {} vs about {expected}", at(d));
+        }
+        assert!((1..30).all(|d| at(d) <= at(d + 1)), "monotonically lighter further out");
+    }
+
+    #[test]
+    fn spread_grows_a_shadow() {
+        let shadow = |spread| {
+            Quad::new(Rect::new(80., 40., 40., 40.), Color::hex(0x808080)).shadow_layer(Shadow::new(0., 0., 0., spread, Color::hex(0)))
+        };
+        let (Some(plain), Some(spread)) = (on_white(shadow(0.), (200., 120.), 1.), on_white(shadow(10.), (200., 120.), 1.)) else { return };
+        assert_eq!(plain.pixel(74, 60)[0], 255, "6px outside, no spread: no shadow");
+        assert!(spread.pixel(74, 60)[0] < 5, "6px outside, 10px spread: inside the shadow");
+        assert_eq!(spread.pixel(66, 60)[0], 255, "14px outside is past the spread");
+        // A negative spread shrinks it: a 40px box's shadow dropped 30px down and shrunk by 10 on each
+        // side covers x 90..110, y 80..100.
+        let drop = Quad::new(Rect::new(80., 40., 40., 40.), Color::hex(0x808080)).shadow_layer(Shadow::new(0., 30., 0., -10., Color::hex(0xff0000)));
+        let Some(shrunk) = on_white(drop, (200., 120.), 1.) else { return };
+        assert!(close(shrunk.pixel(100, 90), [255, 0, 0], 3), "inside the shrunk shadow: {:?}", shrunk.pixel(100, 90));
+        assert_eq!(shrunk.pixel(85, 90)[1], 255, "where an unshrunk shadow would have been");
+    }
+
+    #[test]
+    fn inset_and_outer_shadows_work_together() {
+        let quad = Quad::new(Rect::new(60., 40., 80., 60.), Color::hex(0x808080))
+            .rounded(10.)
+            .inset_shadow_layer(Shadow::new(0., 2., 0., 0., WHITE))
+            .shadow_layer(Shadow::new(0., 10., 12., 0., Color::hex(0)));
+        let Some(image) = on_white(quad, (200., 160.), 2.) else { return };
+        // At scale 2: the top highlight is 2 logical px = 4 device px thick just inside the top edge.
+        assert!(close(image.pixel(200, 82), [255, 255, 255], 6), "highlight: {:?}", image.pixel(200, 82));
+        assert!(close(image.pixel(200, 140), [128, 128, 128], 3), "the middle keeps its fill: {:?}", image.pixel(200, 140));
+        assert!(image.pixel(200, 215)[0] < 200, "the outer shadow darkens the area just below the box: {:?}", image.pixel(200, 215));
+        assert_eq!(image.pixel(200, 60)[0], 255, "and not above it, where its offset keeps it away: {:?}", image.pixel(200, 60));
+    }
+
+    #[test]
+    fn an_inset_shadows_spread_makes_a_band_inside_the_border() {
+        let quad = Quad::new(Rect::new(40., 40., 100., 60.), WHITE).inset_shadow_layer(Shadow::new(0., 0., 0., 5., Color::hex(0)));
+        let Some(image) = on_white(quad, (200., 140.), 1.) else { return };
+        assert!(image.pixel(42, 70)[0] < 5, "2px in: inside the 5px band");
+        assert!(image.pixel(70, 43)[0] < 5);
+        assert_eq!(image.pixel(70, 70)[0], 255, "the middle is untouched");
+        assert_eq!(image.pixel(70, 47)[0], 255, "7px in is past the band");
     }
 }

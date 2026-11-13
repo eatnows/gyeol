@@ -90,7 +90,7 @@ struct Quad {
     @location(0) pos: vec2<f32>,
     @location(1) size: vec2<f32>,
     @location(4) radii: vec4<f32>,
-    @location(12) backdrop: vec2<f32>, // blur sigma, saturate
+    @location(8) backdrop: vec2<f32>, // blur sigma, saturate
 };
 
 struct QuadOut {
