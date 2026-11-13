@@ -88,6 +88,16 @@ pub enum Cursor {
     Default,
     Pointer,
     Text,
+    /// East-west arrows, for dragging a vertical divider (CSS `col-resize`).
+    ResizeHorizontal,
+    /// North-south arrows, for dragging a horizontal divider (CSS `row-resize`).
+    ResizeVertical,
+    /// An open hand: something that can be dragged (CSS `grab`).
+    Grab,
+    /// A closed hand: something being dragged (CSS `grabbing`).
+    Grabbing,
+    /// A circle with a slash: the action is not available (CSS `not-allowed`).
+    NotAllowed,
 }
 
 /// Everything about how an element is laid out and painted. Edges are `[top, right, bottom, left]`.
@@ -468,6 +478,16 @@ impl<S> Element<S> {
         self
     }
 
+    pub fn ml(mut self, v: f32) -> Self {
+        self.style.margin[3] = v;
+        self
+    }
+
+    pub fn mr(mut self, v: f32) -> Self {
+        self.style.margin[1] = v;
+        self
+    }
+
     pub fn mt(mut self, v: f32) -> Self {
         self.style.margin[0] = v;
         self
@@ -490,6 +510,19 @@ impl<S> Element<S> {
 
     pub fn size(self, px: f32) -> Self {
         self.w(px).h(px)
+    }
+
+    /// Width as a fraction of the parent's width, `0.0..=1.0` (`w_frac(0.37)` is `width: 37%`). The parent
+    /// needs a definite width for this to resolve.
+    pub fn w_frac(mut self, fraction: f32) -> Self {
+        self.style.width = Length::Fraction(fraction);
+        self
+    }
+
+    /// Height as a fraction of the parent's height, `0.0..=1.0`.
+    pub fn h_frac(mut self, fraction: f32) -> Self {
+        self.style.height = Length::Fraction(fraction);
+        self
     }
 
     pub fn w_full(mut self) -> Self {
@@ -524,8 +557,14 @@ impl<S> Element<S> {
 
     /// Takes a share of the free space along the parent's main axis, starting from nothing (like CSS
     /// `flex: 1`), so its own content size does not push the others out.
-    pub fn grow(mut self) -> Self {
-        self.style.grow = 1.;
+    pub fn grow(self) -> Self {
+        self.grow_by(1.)
+    }
+
+    /// Like [`Element::grow`] with a flex-grow factor: free space is shared out in proportion to the
+    /// factors (`grow_by(2.)` takes twice what a `grow()` sibling does).
+    pub fn grow_by(mut self, factor: f32) -> Self {
+        self.style.grow = factor;
         self.style.shrink = 1.;
         self.style.basis = Length::Px(0.);
         self

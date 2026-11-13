@@ -176,6 +176,11 @@ impl From<Cursor> for winit::window::CursorIcon {
             Cursor::Default => winit::window::CursorIcon::Default,
             Cursor::Pointer => winit::window::CursorIcon::Pointer,
             Cursor::Text => winit::window::CursorIcon::Text,
+            Cursor::ResizeHorizontal => winit::window::CursorIcon::ColResize,
+            Cursor::ResizeVertical => winit::window::CursorIcon::RowResize,
+            Cursor::Grab => winit::window::CursorIcon::Grab,
+            Cursor::Grabbing => winit::window::CursorIcon::Grabbing,
+            Cursor::NotAllowed => winit::window::CursorIcon::NotAllowed,
         }
     }
 }

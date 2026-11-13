@@ -856,6 +856,25 @@ mod tests {
         assert_eq!(paint(el(), (5., 5.)).quads().next().unwrap().background.a, 1.);
     }
 
+    #[test]
+    fn fractions_resolve_against_the_parent_and_margins_and_grow_factors_shift_the_layout() {
+        let mut shaper = Shaper::new();
+        // A 200x40 track with a fill that is 37% wide and half as tall.
+        let root = div().col().child(div().w(200.).h(40.).child(div().w_frac(0.37).h_frac(0.5).bg(Color::hex(0xff0000))));
+        let (laid, _) = lay(root, &mut shaper);
+        assert_eq!(b(&laid, 2), (0., 0., 74., 20.));
+
+        // A row of three: a fixed box with margins, then flex children sharing the rest 1 : 2.
+        let root = div().row().child(div().w(40.).h(10.).ml(5.).mr(15.)).child(div().h(10.).grow()).child(div().h(10.).grow_by(2.));
+        let (laid, _) = lay(root, &mut shaper);
+        assert_eq!(b(&laid, 1), (5., 0., 40., 10.), "ml pushes it right");
+        // 400 - (5 + 40 + 15) = 340 shared 1 : 2, starting after the right margin.
+        let (second, third) = (b(&laid, 2), b(&laid, 3));
+        assert_eq!(second.0, 60.);
+        assert!((second.2 - 340. / 3.).abs() <= 1. && (third.2 - 680. / 3.).abs() <= 1., "{second:?} {third:?}");
+        assert!((third.0 - (60. + second.2)).abs() <= 1.);
+    }
+
     fn list(rows: usize) -> Element<()> {
         let mut inner = div().id("list").h(100.).overflow_y_scroll();
         for _ in 0..rows {

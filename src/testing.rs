@@ -596,4 +596,33 @@ mod tests {
         host.mouse_move((350., 50.));
         assert!(quad(&host).gradients.is_empty() && quad(&host).shadows.is_empty(), "left");
     }
+
+    struct Cursors;
+
+    impl View for Cursors {
+        fn view(&self, _: &mut Cx) -> Element<Self> {
+            div()
+                .row()
+                .child(div().w(50.).h(50.).cursor(Cursor::ResizeHorizontal))
+                .child(div().w(50.).h(50.).cursor(Cursor::ResizeVertical))
+                .child(div().w(50.).h(50.).cursor(Cursor::Grab))
+                .child(div().w(50.).h(50.).cursor(Cursor::Grabbing))
+                .child(div().w(50.).h(50.).cursor(Cursor::NotAllowed))
+        }
+    }
+
+    #[test]
+    fn the_new_cursors_are_reported_over_their_elements_and_map_to_window_cursors() {
+        let mut host = TestHost::new(Cursors, (400., 100.));
+        for (x, cursor) in [(25., Cursor::ResizeHorizontal), (75., Cursor::ResizeVertical), (125., Cursor::Grab), (175., Cursor::Grabbing), (225., Cursor::NotAllowed), (350., Cursor::Default)] {
+            host.mouse_move((x, 25.));
+            assert_eq!(host.cursor(), cursor);
+        }
+        use winit::window::CursorIcon;
+        assert_eq!(CursorIcon::from(Cursor::ResizeHorizontal), CursorIcon::ColResize);
+        assert_eq!(CursorIcon::from(Cursor::ResizeVertical), CursorIcon::RowResize);
+        assert_eq!(CursorIcon::from(Cursor::Grab), CursorIcon::Grab);
+        assert_eq!(CursorIcon::from(Cursor::Grabbing), CursorIcon::Grabbing);
+        assert_eq!(CursorIcon::from(Cursor::NotAllowed), CursorIcon::NotAllowed);
+    }
 }
