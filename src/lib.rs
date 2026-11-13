@@ -22,8 +22,10 @@ pub mod testing;
 mod text;
 pub mod view;
 
-pub use element::{div, paths, text, Align, Cursor, Direction, Element, ElementId, Justify, Length, MouseEvent, Overflow, Style};
+pub use element::{div, icon_from, paths, text, Align, Cursor, Direction, Element, ElementId, Justify, Length, MouseEvent, Overflow, Style};
 pub use error::{Error, Result};
+#[cfg(feature = "svg")]
+pub use element::icon;
 pub use event::{Event, Ime, Key, Modifiers, MouseButton, NamedKey, ScrollDelta, SystemTheme};
 pub use renderer::Renderer;
 pub use scene::{BackdropBlur, Capped, Color, Gradient, GradientKind, GradientStop, RadialSize, MAX_GRADIENT_LAYERS, MAX_GRADIENT_STOPS, Path, PathCommand, Quad, Rect, Scene, Shadow, Text, MAX_SHADOWS};

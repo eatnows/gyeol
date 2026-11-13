@@ -48,6 +48,8 @@ pub(crate) struct Node<S> {
     radii: [f32; 4],
     text: Option<(String, TextStyle, Color)>,
     paths: Vec<Path>,
+    /// A vector icon and the tint it inherited.
+    icon: Option<(std::sync::Arc<crate::icon::IconData>, Color)>,
     cursor: Cursor,
     on_click: Option<Handler<S>>,
     on_mouse_down: Option<MouseHandler<S>>,
@@ -286,6 +288,9 @@ pub(crate) fn layout_and_paint<S>(
         for path in &node.paths {
             scene.push_path(path.clone().translated(node.bounds.x, node.bounds.y).clipped(node.clip));
         }
+        if let Some((data, color)) = &node.icon {
+            scene.push_icon(crate::icon::Icon::new(data.clone(), node.bounds, *color).clipped(node.clip));
+        }
         if let (Some(color), true) = (node.scrollbar, node.scroll_max.1 > 0.) {
             let (view_h, content_h) = (node.bounds.h, node.bounds.h + node.scroll_max.1);
             let thumb_h = (view_h * view_h / content_h).max(THUMB_MIN).min(view_h);
@@ -335,6 +340,7 @@ fn build<S>(
         radii: style.radii,
         text: None,
         paths: Vec::new(),
+        icon: None,
         cursor: style.cursor,
         on_click,
         on_mouse_down,
@@ -363,6 +369,10 @@ fn build<S>(
         Kind::Paths(paths) => {
             nodes[index].paths = paths;
             tree.new_leaf(taffy_style).expect("path leaf")
+        }
+        Kind::Icon(data) => {
+            nodes[index].icon = Some((data, text_color));
+            tree.new_leaf(taffy_style).expect("icon leaf")
         }
     };
     nodes[index].taffy_id = taffy_id;
@@ -623,6 +633,50 @@ mod tests {
         assert_eq!(quad.inset_shadows.len(), 2);
         let (_, scene) = lay(div().w(50.).h(50.).shadow_layer(a).shadow(1., 1., 1., Color::hex(0)), &mut shaper);
         assert_eq!(scene.quads().next().unwrap().shadows.len(), 1, "the old call replaces");
+    }
+
+    fn square_icon(size: f32) -> std::sync::Arc<crate::icon::IconData> {
+        use crate::icon::{IconCommand, IconData, IconShape, IconStroke, LineCap, LineJoin};
+        let stroke = IconStroke { width: 2., cap: LineCap::Round, join: LineJoin::Round, miter_limit: 4., opacity: 1. };
+        let shape = IconShape { commands: vec![IconCommand::MoveTo(2., 2.), IconCommand::LineTo(size - 2., size - 2.)], transform: [1., 0., 0., 1., 0., 0.], fill: None, stroke: Some(stroke) };
+        std::sync::Arc::new(IconData::new(Rect::new(0., 0., size, size), vec![shape]))
+    }
+
+    #[test]
+    fn an_icon_is_a_layout_box_sized_by_its_view_box_or_size_and_tinted_by_the_inherited_color() {
+        use crate::element::icon_from;
+        let mut shaper = Shaper::new();
+        let red = Color::hex(0xff0000);
+        let blue = Color::hex(0x0000ff);
+        let root = div()
+            .row()
+            .gap(10.)
+            .text_color(red)
+            .child(icon_from(square_icon(24.)))
+            .child(icon_from(square_icon(24.)).size(16.).text_color(blue))
+            .child(div().w(30.).h(30.));
+        let (laid, scene) = lay(root, &mut shaper);
+        assert_eq!(b(&laid, 1), (0., 0., 24., 24.), "defaults to the viewBox size");
+        assert_eq!(b(&laid, 2), (34., 0., 16., 16.), ".size() overrides it and the box takes part in the flex layout");
+        assert_eq!(b(&laid, 3), (60., 0., 30., 30.));
+        let icons: Vec<_> = scene.icons().collect();
+        assert_eq!(icons.len(), 2);
+        assert_eq!((icons[0].bounds, icons[0].color), (Rect::new(0., 0., 24., 24.), red), "inherits the text color");
+        assert_eq!((icons[1].bounds, icons[1].color), (Rect::new(34., 0., 16., 16.), blue), "its own color wins");
+    }
+
+    #[test]
+    fn icons_are_clipped_scrolled_and_hit_like_any_box() {
+        use crate::element::icon_from;
+        let mut shaper = Shaper::new();
+        let mut store = ScrollStore::new();
+        let row = |i: usize| icon_from(square_icon(24.)).on_click(move |_, _| { let _ = i; });
+        let root: Element<()> = div().child(div().id("s").h(40.).overflow_y_scroll().child(row(0)).child(row(1)).child(row(2)));
+        let (laid, scene) = layout_and_paint(root, SIZE, NOWHERE, Color::hex(0xffffff), &mut shaper, &mut store);
+        let clips: Vec<_> = scene.icons().map(|i| i.clip).collect();
+        assert_eq!(clips.len(), 3);
+        assert!(clips.iter().all(|c| *c == Some(Rect::new(0., 0., 400., 40.))), "cut off at the container: {clips:?}");
+        assert_eq!(laid.click_target((5., 5.)), Some(2), "an icon can be a click target (the first icon is node 2)");
     }
 
     fn list(rows: usize) -> Element<()> {

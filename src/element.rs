@@ -6,6 +6,7 @@
 use std::hash::{Hash, Hasher};
 
 use crate::{
+    icon::IconData,
     event::{Modifiers, MouseButton},
     scene::{BackdropBlur, Capped, Color, Gradient, Path, Shadow, MAX_GRADIENT_LAYERS, MAX_SHADOWS},
     shell::Cx,
@@ -205,6 +206,7 @@ pub(crate) enum Kind<S> {
     Div(Vec<Element<S>>),
     Text(String),
     Paths(Vec<Path>),
+    Icon(std::sync::Arc<IconData>),
 }
 
 /// A node of the UI tree. Build one with [`div`] or [`text`].
@@ -234,6 +236,27 @@ pub fn text<S>(content: impl Into<String>) -> Element<S> {
 /// absolute positioning, scrolling and clipping like any other element.
 pub fn paths<S>(items: Vec<Path>) -> Element<S> {
     Element { id: None, style: Style::default(), kind: Kind::Paths(items), on_click: None, on_mouse_down: None, on_drag: None, on_mouse_up: None }
+}
+
+/// A vector icon, drawn crisply at any size and device scale in the text color it inherits (SVG
+/// `currentColor`). It is a normal layout box: `.size(16.)`, `.w()`/`.h()` set its size (the default is
+/// the SVG's `viewBox` size), and `.text_color(c)` on it or an ancestor tints it. Needs the `svg` feature;
+/// see [`IconData::parse`] for the SVG subset.
+///
+/// ```ignore
+/// icon(include_str!("chevron-right.svg")).size(16.).text_color(Color::hex(0xffffff))
+/// ```
+#[cfg(feature = "svg")]
+pub fn icon<S>(svg: &str) -> Element<S> {
+    icon_from(IconData::cached(svg))
+}
+
+/// Like [`icon`], for an icon that is already parsed (or built by hand), without the `svg` feature.
+pub fn icon_from<S>(data: std::sync::Arc<IconData>) -> Element<S> {
+    let mut style = Style::default();
+    style.width = Length::Px(data.view_box.w);
+    style.height = Length::Px(data.view_box.h);
+    Element { id: None, style, kind: Kind::Icon(data), on_click: None, on_mouse_down: None, on_drag: None, on_mouse_up: None }
 }
 
 impl<S> Element<S> {
