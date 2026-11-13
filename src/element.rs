@@ -128,6 +128,8 @@ pub struct Style {
     /// Corner radii: top-left, top-right, bottom-right, bottom-left.
     pub radii: [f32; 4],
     pub hover_background: Option<Color>,
+    /// Multiplies the alpha of this element and everything below it; 1 is opaque. See [`Element::opacity`].
+    pub opacity: f32,
     /// Paint overrides applied while the pointer is over the element or one of its descendants.
     pub hover: HoverStyle,
     /// Inherited by descendants that do not set their own.
@@ -174,6 +176,7 @@ impl Default for Style {
             border_color: Color::TRANSPARENT,
             radii: [0.; 4],
             hover_background: None,
+            opacity: 1.,
             hover: HoverStyle::default(),
             text_color: None,
             text_size: None,
@@ -671,6 +674,18 @@ impl<S> Element<S> {
     /// deviation in logical pixels.
     pub fn backdrop_blur(mut self, radius: f32, saturate: f32) -> Self {
         self.style.backdrop_blur = Some(BackdropBlur { radius, saturate });
+        self
+    }
+
+    /// Fades this element and its whole subtree (CSS `opacity`): the alpha of backgrounds, gradients,
+    /// shadows, borders, text, icons and paths is multiplied by `opacity` (`0.0..=1.0`), and by the
+    /// opacity of every ancestor.
+    ///
+    /// This is a per-item approximation: each thing is faded on its own, so where two items inside the
+    /// subtree overlap you see the lower one through the upper one, which a true group opacity (render the
+    /// subtree, then fade the result) would hide. A backdrop blur is not faded.
+    pub fn opacity(mut self, opacity: f32) -> Self {
+        self.style.opacity = opacity.clamp(0., 1.);
         self
     }
 

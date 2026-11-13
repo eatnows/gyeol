@@ -40,6 +40,7 @@ pub(crate) struct Node<S> {
     background: Option<Color>,
     hover_background: Option<Color>,
     hover: HoverStyle,
+    opacity: f32,
     /// Whether `text_color` was set on this element itself (descendants inherit it).
     explicit_text_color: bool,
     gradients: Capped<Gradient, MAX_GRADIENT_LAYERS>,
@@ -280,6 +281,12 @@ pub(crate) fn layout_and_paint<S>(
         }
         inherited
     };
+    // Each element's opacity times its ancestors' (parents come first), honoring hover overrides.
+    let mut fade = vec![1f32; laid.nodes.len()];
+    for (i, node) in laid.nodes.iter().enumerate() {
+        let own = if hovered.contains(&i) { node.hover.opacity.unwrap_or(node.opacity) } else { node.opacity };
+        fade[i] = node.parent.map_or(1., |p| fade[p]) * own;
+    }
     let mut scene = Scene { background: Some(background), ..Default::default() };
     let mut thumbs: Vec<(usize, Quad)> = Vec::new();
     for (i, node) in laid.nodes.iter().enumerate() {
@@ -297,31 +304,41 @@ pub(crate) fn layout_and_paint<S>(
         let inset_shadows = hover.and_then(|h| h.inset_shadows).unwrap_or(node.inset_shadows);
         let border_color = hover.and_then(|h| h.border_color).unwrap_or(node.border_color);
         if fill.is_some() || !gradients.is_empty() || !shadows.is_empty() || !inset_shadows.is_empty() || node.backdrop_blur.is_some() || node.border_width > 0. {
-            let mut quad = Quad::new(node.bounds, fill.unwrap_or(Color::TRANSPARENT)).rounded_corners(node.radii).clipped(node.clip);
-            quad.gradients = gradients;
-            quad.shadows = shadows;
-            quad.inset_shadows = inset_shadows;
+            let f = fade[i];
+            let mut quad = Quad::new(node.bounds, fill.unwrap_or(Color::TRANSPARENT).faded(f)).rounded_corners(node.radii).clipped(node.clip);
+            if f < 1. {
+                // Fade every paint that has alpha.
+                quad.gradients = gradients.iter().map(|g| g.faded(f)).collect();
+                quad.shadows = shadows.iter().map(|s| s.faded(f)).collect();
+                quad.inset_shadows = inset_shadows.iter().map(|s| s.faded(f)).collect();
+            } else {
+                quad.gradients = gradients;
+                quad.shadows = shadows;
+                quad.inset_shadows = inset_shadows;
+            }
             quad.backdrop_blur = node.backdrop_blur;
             if node.border_width > 0. {
-                quad = quad.bordered(node.border_width, border_color);
+                quad = quad.bordered(node.border_width, border_color.faded(f));
             }
             scene.push_quad(quad);
         }
         if let Some((content, size, color)) = &node.text {
-            scene.push_text(Text::new((node.bounds.x, node.bounds.y), content.clone(), *size, text_color(i, *color)).clipped(node.clip));
+            scene.push_text(Text::new((node.bounds.x, node.bounds.y), content.clone(), *size, text_color(i, *color).faded(fade[i])).clipped(node.clip));
         }
         for path in &node.paths {
-            scene.push_path(path.clone().translated(node.bounds.x, node.bounds.y).clipped(node.clip));
+            let mut path = path.clone().translated(node.bounds.x, node.bounds.y).clipped(node.clip);
+            path.color = path.color.faded(fade[i]);
+            scene.push_path(path);
         }
         if let Some((data, color)) = &node.icon {
-            scene.push_icon(crate::icon::Icon::new(data.clone(), node.bounds, text_color(i, *color)).clipped(node.clip));
+            scene.push_icon(crate::icon::Icon::new(data.clone(), node.bounds, text_color(i, *color).faded(fade[i])).clipped(node.clip));
         }
         if let (Some(color), true) = (node.scrollbar, node.scroll_max.1 > 0.) {
             let (view_h, content_h) = (node.bounds.h, node.bounds.h + node.scroll_max.1);
             let thumb_h = (view_h * view_h / content_h).max(THUMB_MIN).min(view_h);
             let y = node.bounds.y + (node.scroll_offset.1 / node.scroll_max.1) * (view_h - thumb_h);
             let x = node.bounds.x + node.bounds.w - THUMB_WIDTH - 2.;
-            let thumb = Quad::new(Rect::new(x, y, THUMB_WIDTH, thumb_h), color).rounded(THUMB_WIDTH / 2.).clipped(node.clip);
+            let thumb = Quad::new(Rect::new(x, y, THUMB_WIDTH, thumb_h), color.faded(fade[i])).rounded(THUMB_WIDTH / 2.).clipped(node.clip);
             thumbs.push((end[i], thumb));
             thumbs.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
         }
@@ -357,6 +374,7 @@ fn build<S>(
         background: style.background,
         hover_background: style.hover_background,
         hover: style.hover,
+        opacity: style.opacity,
         explicit_text_color: style.text_color.is_some(),
         gradients: style.gradients,
         shadows: style.shadows,
@@ -776,6 +794,66 @@ mod tests {
         };
         assert_eq!(colors(NOWHERE), (vec![idle, own], vec![idle]));
         assert_eq!(colors((5., 5.)), (vec![hot, own], vec![hot]), "text and icon follow the hover color, the explicit one keeps its own");
+    }
+
+    fn alpha_close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-5
+    }
+
+    #[test]
+    fn opacity_multiplies_the_alpha_of_every_kind_of_item_in_the_subtree() {
+        use crate::element::{icon_from, paths};
+        let red = Color::hex(0xff0000);
+        let glow = Color::hex(0x00ff00).with_alpha(0.8);
+        let el = || -> Element<()> {
+            div().child(
+                div()
+                    .opacity(0.5)
+                    .col()
+                    .child(
+                        div()
+                            .w(50.)
+                            .h(20.)
+                            .bg(red.with_alpha(0.6))
+                            .border(1., red)
+                            .bg_layer(Gradient::linear(90.).stop(red).stop(Color::TRANSPARENT))
+                            .shadow_layer(Shadow::new(0., 2., 4., 0., glow))
+                            .inset_shadow_layer(Shadow::new(0., 1., 0., 0., glow))
+                            .opacity(0.5), // nested: 0.5 * 0.5
+                    )
+                    .child(text("hi").text_color(red))
+                    .child(icon_from(square_icon(16.)).text_color(red))
+                    .child(paths(vec![Path::stroke(red, 2.).move_to(0., 0.).line_to(10., 10.)])),
+            )
+        };
+        let scene = layout_and_paint(el(), SIZE, NOWHERE, Color::hex(0xffffff), &mut Shaper::new(), &mut ScrollStore::new()).1;
+        let q = scene.quads().next().unwrap();
+        assert!(alpha_close(q.background.a, 0.6 * 0.25), "bg: {}", q.background.a);
+        assert!(alpha_close(q.border_color.a, 0.25));
+        let stop_alphas: Vec<f32> = q.gradients.iter().flat_map(|g| g.stops.iter().map(|s| s.color.a)).collect();
+        assert!(stop_alphas.iter().zip([0.25, 0.]).all(|(a, b)| alpha_close(*a, b)), "{stop_alphas:?}");
+        assert!(alpha_close(q.shadows.as_slice()[0].color.a, 0.8 * 0.25) && alpha_close(q.inset_shadows.as_slice()[0].color.a, 0.8 * 0.25));
+        assert!(alpha_close(scene.texts().next().unwrap().color.a, 0.5), "text takes the parent's 0.5");
+        assert!(alpha_close(scene.icons().next().unwrap().color.a, 0.5));
+        assert!(alpha_close(scene.paths().next().unwrap().color.a, 0.5));
+        // Colors keep their hue, only alpha changes.
+        assert_eq!((q.border_color.r, q.border_color.g), (1., 0.));
+    }
+
+    #[test]
+    fn full_opacity_changes_nothing_and_zero_hides_everything_and_hover_can_fade_in() {
+        let build = |o: f32| -> Element<()> { div().child(div().w(30.).h(30.).bg(Color::hex(0xff0000)).opacity(o).child(text("x"))) };
+        let paint = |el, mouse| layout_and_paint(el, SIZE, mouse, Color::hex(0xffffff), &mut Shaper::new(), &mut ScrollStore::new()).1;
+        let full = paint(build(1.), NOWHERE);
+        assert_eq!((full.quads().next().unwrap().background.a, full.texts().next().unwrap().color.a), (1., 1.));
+        let none = paint(build(0.), NOWHERE);
+        assert_eq!((none.quads().next().unwrap().background.a, none.texts().next().unwrap().color.a), (0., 0.));
+        assert_eq!(paint(build(7.), NOWHERE).quads().next().unwrap().background.a, 1., "clamped to 1");
+
+        // A dim element that brightens while hovered.
+        let el = || -> Element<()> { div().child(div().w(30.).h(30.).bg(Color::hex(0xff0000)).opacity(0.4).hover(|h| h.opacity(1.))) };
+        assert!(alpha_close(paint(el(), NOWHERE).quads().next().unwrap().background.a, 0.4));
+        assert_eq!(paint(el(), (5., 5.)).quads().next().unwrap().background.a, 1.);
     }
 
     fn list(rows: usize) -> Element<()> {

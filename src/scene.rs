@@ -30,6 +30,11 @@ impl Color {
         Color { a, ..self }
     }
 
+    /// This color with its alpha multiplied by `factor` (`0.0..=1.0`).
+    pub fn faded(self, factor: f32) -> Color {
+        Color { a: self.a * factor, ..self }
+    }
+
     pub(crate) fn to_array(self) -> [f32; 4] {
         [self.r, self.g, self.b, self.a]
     }
@@ -112,6 +117,10 @@ impl<T: Copy + Default, const N: usize> Capped<T, N> {
     pub fn iter(&self) -> std::slice::Iter<'_, T> {
         self.as_slice().iter()
     }
+
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, T> {
+        self.items[..self.len].iter_mut()
+    }
 }
 
 impl<T: Copy + Default, const N: usize> FromIterator<T> for Capped<T, N> {
@@ -193,6 +202,14 @@ impl Gradient {
         Gradient { kind: GradientKind::Radial { center, size }, stops: Capped::default() }
     }
 
+    /// This gradient with every stop's alpha multiplied by `factor`.
+    pub fn faded(mut self, factor: f32) -> Gradient {
+        for stop in self.stops.iter_mut() {
+            stop.color = stop.color.faded(factor);
+        }
+        self
+    }
+
     /// Adds a stop whose position is worked out by CSS: the first is at 0, the last at 1, and stops
     /// without a position are spread evenly between their neighbours.
     pub fn stop(mut self, color: Color) -> Gradient {
@@ -258,6 +275,12 @@ pub struct Shadow {
 }
 
 impl Shadow {
+    /// This shadow with its color's alpha multiplied by `factor`.
+    pub fn faded(mut self, factor: f32) -> Shadow {
+        self.color = self.color.faded(factor);
+        self
+    }
+
     /// `box-shadow: x y blur spread color`.
     pub fn new(x: f32, y: f32, blur: f32, spread: f32, color: Color) -> Shadow {
         Shadow { offset: (x, y), blur, spread, color }
