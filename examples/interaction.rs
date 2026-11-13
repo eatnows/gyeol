@@ -1,5 +1,6 @@
-//! A slider driven by `MouseEvent::size`, dividers that glow on hover (`Element::hover`), and faded
-//! cards (`Element::opacity`).
+//! A slider driven by `MouseEvent::size`, a dropdown menu that opens over a clipped container
+//! (`Element::overlay`, closed by `on_mouse_down_outside`), dividers that glow on hover
+//! (`Element::hover`), and faded cards (`Element::opacity`).
 //!
 //! `cargo run --example interaction` opens a window (drag the slider, hover the dividers);
 //! `cargo run --example interaction --features snapshot -- out.png [scale] [pointer-x pointer-y]` writes a
@@ -13,7 +14,11 @@ const TRACK_W: f32 = 320.;
 
 struct Interaction {
     value: f32,
+    open: bool,
+    choice: usize,
 }
+
+const CHOICES: [&str; 4] = ["Original", "Soft light", "High contrast", "Monochrome"];
 
 impl Interaction {
     /// Sets the value to how far across the track the pointer is, from the event's own size.
@@ -55,6 +60,59 @@ fn card(opacity: f32) -> Element<Interaction> {
         .child(text("child text").text_size(11.).text_color(DIM))
 }
 
+/// A select box: the button toggles the menu, which floats over the rest of the UI even though its
+/// container clips its content; pressing anywhere else closes it.
+fn dropdown(state: &Interaction) -> Element<Interaction> {
+    let menu = div()
+        .overlay()
+        .left(0.)
+        .top(42.)
+        .w(200.)
+        .p(6.)
+        .col()
+        .gap(2.)
+        .rounded(12.)
+        .bg(Color::hex(0x252a37))
+        .border(1., Color::hex(0xffffff).with_alpha(0.12))
+        .shadow_layer(Shadow::new(0., 12., 28., 0., Color::hex(0).with_alpha(0.6)))
+        .children(CHOICES.iter().enumerate().map(|(i, label)| {
+            div()
+                .px(10.)
+                .py(7.)
+                .rounded(8.)
+                .text_color(if i == state.choice { ACCENT } else { INK })
+                .hover(|h| h.bg(Color::hex(0xffffff).with_alpha(0.08)))
+                .on_click(move |s: &mut Interaction, _| {
+                    s.choice = i;
+                    s.open = false;
+                })
+                .child(text(*label).text_size(13.))
+        }));
+    let button = div()
+        .w(200.)
+        .h(34.)
+        .px(12.)
+        .row()
+        .items_center()
+        .justify_between()
+        .rounded(10.)
+        .bg(Color::hex(0x2a2f3a))
+        .border(1., if state.open { ACCENT } else { Color::hex(0xffffff).with_alpha(0.12) })
+        .hover(|h| h.bg(Color::hex(0x333a4a)))
+        .text_color(INK)
+        .on_click(|s: &mut Interaction, _| s.open = !s.open)
+        .child(text(CHOICES[state.choice]).text_size(13.))
+        .child(text(if state.open { "^" } else { "v" }).text_size(12.).text_color(DIM));
+    // The wrapper clips its content (like a card with overflow hidden) and closes the menu on outside presses.
+    div()
+        .w(200.)
+        .h(34.)
+        .overflow_hidden()
+        .on_mouse_down_outside(|s: &mut Interaction, _| s.open = false)
+        .child(button)
+        .child(if state.open { menu } else { div() })
+}
+
 impl View for Interaction {
     fn view(&self, _cx: &mut Cx) -> Element<Self> {
         let fill = self.value * TRACK_W;
@@ -86,6 +144,7 @@ impl View for Interaction {
             .w_full()
             .h_full()
             .child(section(&format!("slider: local.0 / size.0 = {:.2}", self.value)).child(slider))
+            .child(section("overlay: a menu over a clipped container, closed by an outside press").child(dropdown(self)))
             .child(section("hover: replaces gradient layers and shadows").child(divider("divider one")).child(divider("divider two")).child(div().row().child(chip)))
             .child(section("opacity: fades background, gradient, border, shadow and text").child(div().row().gap(18.).child(card(1.)).child(card(0.7)).child(card(0.4)).child(card(0.15))))
     }
@@ -104,13 +163,13 @@ fn main() {
             let scale = number(1).unwrap_or(1.);
             let pointer = number(2).zip(number(3));
             let options = gyeol::snapshot::Options { pointer, ..Default::default() };
-            let image = gyeol::snapshot::view_with(Interaction { value: 0.6 }, (600., 420.), scale, &options).expect("render the snapshot");
+            let image = gyeol::snapshot::view_with(Interaction { value: 0.6, open: true, choice: 1 }, (600., 600.), scale, &options).expect("render the snapshot");
             image.save_png(path).expect("save the png");
             println!("wrote {path} ({}x{})", image.width, image.height);
             return;
         }
     }
-    if let Err(e) = gyeol::run_view("gyeol interaction", Interaction { value: 0.35 }) {
+    if let Err(e) = gyeol::run_view("gyeol interaction", Interaction { value: 0.35, open: false, choice: 0 }) {
         eprintln!("error: {e}");
         std::process::exit(1);
     }
