@@ -194,6 +194,10 @@ pub struct MouseEvent {
     pub pos: (f32, f32),
     /// Position relative to the element's top-left corner (scrolling included).
     pub local: (f32, f32),
+    /// The element's size in logical pixels, so `local.0 / size.0` is how far across it the pointer
+    /// is (a slider or scrub bar). While the pointer is captured by a drag this is the captured
+    /// element's size, wherever the pointer is.
+    pub size: (f32, f32),
     pub button: MouseButton,
     /// 1 for a single click, 2 for a double click, and so on.
     pub click_count: u32,

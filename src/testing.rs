@@ -523,4 +523,50 @@ mod tests {
         host.key(Key::Char("k".into()), Some("k"));
         assert_eq!(host.scroll_offset("rows").1, 0., "row 0 is brought back to the top");
     }
+
+    struct Slider {
+        events: Vec<(&'static str, crate::element::MouseEvent)>,
+    }
+
+    impl View for Slider {
+        fn view(&self, _: &mut Cx) -> Element<Self> {
+            // A 200x20 scrub bar under a 100px spacer, inside a scroll container that is shorter than its content.
+            let bar = div()
+                .id("bar")
+                .w(200.)
+                .h(20.)
+                .bg(IDLE)
+                .on_mouse_down(|s: &mut Slider, _, e| s.events.push(("down", e)))
+                .on_drag(|s: &mut Slider, _, e| s.events.push(("drag", e)))
+                .on_mouse_up(|s: &mut Slider, _, e| s.events.push(("up", e)));
+            div().child(div().id("list").h(150.).overflow_y_scroll().child(div().h(100.)).child(bar).child(div().h(300.)))
+        }
+    }
+
+    #[test]
+    fn mouse_events_carry_the_size_of_the_element_for_fractions_also_while_dragging_and_scrolled() {
+        let mut host = TestHost::new(Slider { events: Vec::new() }, (400., 300.));
+        // The bar is at y 100..120. Press 50px across it.
+        host.mouse_down((50., 110.));
+        let (kind, down) = host.state().events[0];
+        assert_eq!(kind, "down");
+        assert_eq!((down.size, down.local), ((200., 20.), (50., 10.)));
+        assert_eq!(down.local.0 / down.size.0, 0.25, "a quarter of the way across");
+
+        // Drag far outside the bar (to the right and below it): still the bar's size, local runs past it.
+        host.mouse_move((390., 290.));
+        let (kind, drag) = *host.state().events.last().unwrap();
+        assert_eq!(kind, "drag");
+        assert_eq!(drag.size, (200., 20.), "the captured element's size, not what is under the pointer");
+        assert_eq!(drag.local, (390., 190.));
+        host.mouse_up((10., 5.));
+        let (kind, up) = *host.state().events.last().unwrap();
+        assert_eq!((kind, up.size, up.local), ("up", (200., 20.), (10., -95.)));
+
+        // Scroll the list by 40: the bar is at y 60..80 now, and `local` is measured from where it is.
+        host.scroll((10., 10.), ScrollDelta::Pixels(0., -40.));
+        host.mouse_down((100., 70.));
+        let (_, down) = *host.state().events.last().unwrap();
+        assert_eq!((down.size, down.local), ((200., 20.), (100., 10.)), "scrolling included");
+    }
 }

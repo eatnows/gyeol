@@ -112,7 +112,7 @@ impl<S: View> Host<S> {
         let modifiers = cx.modifiers;
         let mouse_event = |i: usize, pos: (f32, f32), button: MouseButton, click_count: u32| {
             let b = laid.bounds_of(i);
-            MouseEvent { pos, local: (pos.0 - b.x, pos.1 - b.y), button, click_count, modifiers }
+            MouseEvent { pos, local: (pos.0 - b.x, pos.1 - b.y), size: (b.w, b.h), button, click_count, modifiers }
         };
         match event {
             Event::MouseMoved { pos } => {
