@@ -80,6 +80,16 @@ pub struct Shadow {
     pub color: Color,
 }
 
+/// A CSS `backdrop-filter: blur(radius) saturate(saturate)`: what is already painted behind a quad is
+/// blurred and saturated, within the quad's rounded shape, before the quad's own fill is drawn.
+/// `radius` is the CSS `blur()` argument: the gaussian's standard deviation in logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BackdropBlur {
+    pub radius: f32,
+    /// 1 leaves colors as they are, 0 is grayscale, above 1 boosts them.
+    pub saturate: f32,
+}
+
 /// A filled rectangle with optional rounded corners and border.
 #[derive(Clone, Copy, Debug)]
 pub struct Quad {
@@ -91,6 +101,8 @@ pub struct Quad {
     pub shadow: Option<Shadow>,
     /// Drawn inside the quad (inside its border), clipped to its rounded shape.
     pub inset_shadow: Option<Shadow>,
+    /// Blurs and saturates what is behind the quad; the fill (usually translucent) is drawn over it.
+    pub backdrop_blur: Option<BackdropBlur>,
     pub border_color: Color,
     pub border_width: f32,
     /// Corner radii: top-left, top-right, bottom-right, bottom-left.
@@ -101,7 +113,7 @@ pub struct Quad {
 
 impl Quad {
     pub fn new(bounds: Rect, background: Color) -> Quad {
-        Quad { bounds, background, gradient: None, shadow: None, inset_shadow: None, border_color: Color::TRANSPARENT, border_width: 0., corner_radii: [0.; 4], clip: None }
+        Quad { bounds, background, gradient: None, shadow: None, inset_shadow: None, backdrop_blur: None, border_color: Color::TRANSPARENT, border_width: 0., corner_radii: [0.; 4], clip: None }
     }
 
     pub fn rounded(mut self, radius: f32) -> Quad {
@@ -134,6 +146,12 @@ impl Quad {
     /// Adds an inner shadow or highlight (CSS `box-shadow: inset x y blur color`).
     pub fn inset_shadowed(mut self, x: f32, y: f32, blur: f32, color: Color) -> Quad {
         self.inset_shadow = Some(Shadow { offset: (x, y), blur, color });
+        self
+    }
+
+    /// Blurs and saturates what is behind the quad (CSS `backdrop-filter: blur(radius) saturate(saturate)`).
+    pub fn backdrop_blurred(mut self, radius: f32, saturate: f32) -> Quad {
+        self.backdrop_blur = Some(BackdropBlur { radius, saturate });
         self
     }
 
@@ -298,6 +316,13 @@ mod tests {
         let quad = Quad::new(Rect::new(0., 0., 10., 10.), white).inset_shadowed(0., 1., 0., white);
         assert_eq!(quad.inset_shadow, Some(Shadow { offset: (0., 1.), blur: 0., color: white }));
         assert_eq!(quad.shadow, None);
+    }
+
+    #[test]
+    fn a_quad_backdrop_blur_is_recorded_and_defaults_to_none() {
+        let quad = Quad::new(Rect::new(0., 0., 10., 10.), Color::hex(0xffffff).with_alpha(0.3));
+        assert_eq!(quad.backdrop_blur, None);
+        assert_eq!(quad.backdrop_blurred(24., 1.9).backdrop_blur, Some(BackdropBlur { radius: 24., saturate: 1.9 }));
     }
 
     #[test]

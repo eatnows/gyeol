@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 
 use crate::{
     event::{Modifiers, MouseButton},
-    scene::{Color, Gradient, Path, Shadow},
+    scene::{BackdropBlur, Color, Gradient, Path, Shadow},
     shell::Cx,
 };
 
@@ -118,6 +118,7 @@ pub struct Style {
     pub gradient: Option<Gradient>,
     pub shadow: Option<Shadow>,
     pub inset_shadow: Option<Shadow>,
+    pub backdrop_blur: Option<BackdropBlur>,
     pub border_width: f32,
     pub border_color: Color,
     /// Corner radii: top-left, top-right, bottom-right, bottom-left.
@@ -162,6 +163,7 @@ impl Default for Style {
             gradient: None,
             shadow: None,
             inset_shadow: None,
+            backdrop_blur: None,
             border_width: 0.,
             border_color: Color::TRANSPARENT,
             radii: [0.; 4],
@@ -523,6 +525,14 @@ impl<S> Element<S> {
     /// Draws a shadow or highlight inside the element (CSS `box-shadow: inset x y blur color`).
     pub fn inset_shadow(mut self, x: f32, y: f32, blur: f32, color: Color) -> Self {
         self.style.inset_shadow = Some(Shadow { offset: (x, y), blur, color });
+        self
+    }
+
+    /// Blurs and saturates what is painted behind the element (CSS `backdrop-filter: blur(r) saturate(s)`),
+    /// within its rounded shape, before its own background is drawn. `radius` is the gaussian's standard
+    /// deviation in logical pixels.
+    pub fn backdrop_blur(mut self, radius: f32, saturate: f32) -> Self {
+        self.style.backdrop_blur = Some(BackdropBlur { radius, saturate });
         self
     }
 

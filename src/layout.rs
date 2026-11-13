@@ -5,7 +5,7 @@ use taffy::{prelude::*, tree::LayoutOutput, TaffyTree};
 
 use crate::{
     element::{Align, Cursor, Direction, Element, ElementId, Handler, Justify, Kind, Length, MouseHandler, Overflow, Style},
-    scene::{Color, Gradient, Path, Quad, Rect, Scene, Shadow, Text},
+    scene::{BackdropBlur, Color, Gradient, Path, Quad, Rect, Scene, Shadow, Text},
     shaper::{Shaper, TextStyle},
 };
 
@@ -42,6 +42,7 @@ pub(crate) struct Node<S> {
     gradient: Option<Gradient>,
     shadow: Option<Shadow>,
     inset_shadow: Option<Shadow>,
+    backdrop_blur: Option<BackdropBlur>,
     border_width: f32,
     border_color: Color,
     radii: [f32; 4],
@@ -268,11 +269,12 @@ pub(crate) fn layout_and_paint<S>(
             scene.push_quad(thumbs.pop().expect("checked").1);
         }
         let fill = if hovered.contains(&i) { node.hover_background.or(node.background) } else { node.background };
-        if fill.is_some() || node.gradient.is_some() || node.shadow.is_some() || node.inset_shadow.is_some() || node.border_width > 0. {
+        if fill.is_some() || node.gradient.is_some() || node.shadow.is_some() || node.inset_shadow.is_some() || node.backdrop_blur.is_some() || node.border_width > 0. {
             let mut quad = Quad::new(node.bounds, fill.unwrap_or(Color::TRANSPARENT)).rounded_corners(node.radii).clipped(node.clip);
             quad.gradient = node.gradient;
             quad.shadow = node.shadow;
             quad.inset_shadow = node.inset_shadow;
+            quad.backdrop_blur = node.backdrop_blur;
             if node.border_width > 0. {
                 quad = quad.bordered(node.border_width, node.border_color);
             }
@@ -327,6 +329,7 @@ fn build<S>(
         gradient: style.gradient,
         shadow: style.shadow,
         inset_shadow: style.inset_shadow,
+        backdrop_blur: style.backdrop_blur,
         border_width: style.border_width,
         border_color: style.border_color,
         radii: style.radii,
@@ -576,6 +579,18 @@ mod tests {
         let quad = scene.quads().next().unwrap();
         assert_eq!(quad.inset_shadow, Some(Shadow { offset: (0., 1.), blur: 0., color: white }));
         assert_eq!(quad.shadow, None);
+    }
+
+    #[test]
+    fn a_backdrop_blur_reaches_the_painted_quad_after_what_is_behind_it() {
+        let mut shaper = Shaper::new();
+        let root = div()
+            .child(div().w(100.).h(100.).bg(Color::hex(0xff0000)))
+            .child(div().w(50.).h(50.).bg(Color::hex(0xffffff).with_alpha(0.3)).backdrop_blur(24., 1.9));
+        let (_, scene) = lay(root, &mut shaper);
+        let quads: Vec<&Quad> = scene.quads().collect();
+        assert_eq!(quads[0].backdrop_blur, None);
+        assert_eq!(quads[1].backdrop_blur, Some(BackdropBlur { radius: 24., saturate: 1.9 }), "later items blur earlier ones");
     }
 
     fn list(rows: usize) -> Element<()> {

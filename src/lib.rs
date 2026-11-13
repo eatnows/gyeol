@@ -24,7 +24,7 @@ pub use element::{div, paths, text, Align, Cursor, Direction, Element, ElementId
 pub use error::{Error, Result};
 pub use event::{Event, Ime, Key, Modifiers, MouseButton, NamedKey, ScrollDelta, SystemTheme};
 pub use renderer::Renderer;
-pub use scene::{Color, Gradient, Path, PathCommand, Quad, Rect, Scene, Shadow, Text};
+pub use scene::{BackdropBlur, Color, Gradient, Path, PathCommand, Quad, Rect, Scene, Shadow, Text};
 pub use list::{list_rows, uniform_list};
 pub use shaper::{Shaper, TextStyle};
 pub use shell::{run, run_with, App, Cx, Platform, WindowOptions};
