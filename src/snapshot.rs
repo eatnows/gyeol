@@ -401,4 +401,108 @@ mod tests {
         assert_eq!(image.pixel(70, 70)[0], 255, "the middle is untouched");
         assert_eq!(image.pixel(70, 47)[0], 255, "7px in is past the band");
     }
+
+    #[cfg(feature = "svg")]
+    mod icons {
+        use super::*;
+        use crate::icon::{Icon, IconData};
+        use std::sync::Arc;
+
+        const CHEVRON: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>"#;
+        const DISC: &str = r#"<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>"#;
+        const RING: &str = r#"<svg viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 6a4 4 0 1 1 0 8 4 4 0 0 1 0-8Z"/></svg>"#;
+
+        fn icon_scene(svg: &str, bounds: Rect, color: Color) -> Scene {
+            let mut scene = Scene::default();
+            scene.push_icon(Icon::new(IconData::cached(svg), bounds, color));
+            scene
+        }
+
+        fn coverage(image: &Image) -> usize {
+            (0..image.height).flat_map(|y| (0..image.width).map(move |x| (x, y))).filter(|&(x, y)| image.pixel(x, y)[3] > 0).count()
+        }
+
+        #[test]
+        fn a_stroke_icon_draws_in_the_tint_color_and_only_where_its_stroke_is() {
+            let scene = icon_scene(CHEVRON, Rect::new(0., 0., 48., 48.), Color::hex(0x2a9d8f));
+            let Some(image) = render(&scene, (48., 48.), 1., Background::Transparent) else { return };
+            assert!(coverage(&image) > 100, "something was drawn");
+            // The chevron's tip is at (15, 12) of 24 -> (30, 24) of 48; its stroke is 4px wide there.
+            assert_eq!(image.pixel(29, 24), [0x2a, 0x9d, 0x8f, 255], "solid tint in the middle of the stroke");
+            assert_eq!(image.pixel(6, 6)[3], 0, "empty far from the stroke");
+            assert_eq!(image.pixel(40, 40)[3], 0);
+            // Every drawn pixel is the tint color (un-premultiplied), just with partial coverage at the edges.
+            for y in 0..48 {
+                for x in 0..48 {
+                    let p = image.pixel(x, y);
+                    if p[3] > 128 {
+                        assert!(close(p, [0x2a, 0x9d, 0x8f], 4), "({x}, {y}) {p:?}");
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn the_tint_alpha_fades_the_icon_and_a_clip_cuts_it() {
+            let faint = icon_scene(DISC, Rect::new(0., 0., 40., 40.), Color::hex(0xff0000).with_alpha(0.5));
+            let Some(image) = render(&faint, (40., 40.), 1., Background::Transparent) else { return };
+            let middle = image.pixel(20, 20);
+            assert!(close(middle, [255, 0, 0], 3) && (124..132).contains(&middle[3]), "half transparent red: {middle:?}");
+
+            let mut clipped = Scene::default();
+            clipped.push_icon(Icon::new(IconData::cached(DISC), Rect::new(0., 0., 40., 40.), Color::hex(0)).clipped(Some(Rect::new(0., 0., 20., 40.))));
+            let Some(image) = render(&clipped, (40., 40.), 1., Background::Transparent) else { return };
+            assert_eq!(image.pixel(10, 20)[3], 255);
+            assert_eq!(image.pixel(30, 20)[3], 0, "the right half is clipped away");
+        }
+
+        #[test]
+        fn icons_are_crisp_at_scale_2_rasterized_at_device_resolution() {
+            let scene = icon_scene(DISC, Rect::new(2., 2., 10., 10.), Color::hex(0x000000));
+            let (Some(one), Some(two)) = (render(&scene, (14., 14.), 1., Background::Transparent), render(&scene, (14., 14.), 2., Background::Transparent)) else { return };
+            assert_eq!((one.width, two.width), (14, 28));
+            // At scale 2 the disc spans device pixels 4..24 with a sharp edge: its radius is 10 device px,
+            // so the edge pixel at (4, 14) is only the 1px anti-aliased fringe, not a blurry upscaled one.
+            let row: Vec<u8> = (0..28).map(|x| two.pixel(x, 14)[3]).collect();
+            let soft = row.iter().filter(|a| **a > 0 && **a < 255).count();
+            assert!(soft <= 4, "at most two soft pixels per edge, got {soft}: {row:?}");
+            assert_eq!(row[14], 255);
+            assert_eq!(row[1], 0);
+            // The area scales with the square of the scale: 4x the pixels (within edge rounding).
+            let area = |image: &Image| (0..image.height).flat_map(|y| (0..image.width).map(move |x| (x, y))).map(|(x, y)| image.pixel(x, y)[3] as f32 / 255.).sum::<f32>();
+            let ratio = area(&two) / area(&one);
+            assert!((3.9..4.1).contains(&ratio), "{ratio}");
+        }
+
+        #[test]
+        fn a_filled_shape_fills_its_interior_and_evenodd_leaves_a_hole() {
+            let disc = icon_scene(DISC, Rect::new(0., 0., 48., 48.), Color::hex(0x336699));
+            let Some(image) = render(&disc, (48., 48.), 1., Background::Transparent) else { return };
+            assert_eq!(image.pixel(24, 24), [0x33, 0x66, 0x99, 255], "the middle of a filled disc");
+            assert_eq!(image.pixel(24, 8), [0x33, 0x66, 0x99, 255]);
+            assert_eq!(image.pixel(2, 2)[3], 0, "outside the circle");
+
+            let ring = icon_scene(RING, Rect::new(0., 0., 48., 48.), Color::hex(0x336699));
+            let Some(image) = render(&ring, (48., 48.), 1., Background::Transparent) else { return };
+            assert_eq!(image.pixel(24, 24)[3], 0, "evenodd leaves the inner disc empty");
+            assert_eq!(image.pixel(24, 8), [0x33, 0x66, 0x99, 255], "the ring itself is filled (y 4..16 of 48 is inside r 20, outside r 8)");
+        }
+
+        #[test]
+        fn icons_follow_painting_order_and_get_blurred_by_a_later_backdrop_blur() {
+            // An icon painted before a blurred panel is blurred by it; one painted after stays sharp.
+            let mut scene = Scene { background: Some(Color::hex(0xffffff)), ..Default::default() };
+            scene.push_icon(Icon::new(Arc::new(IconData::parse(DISC).unwrap()), Rect::new(10., 10., 40., 40.), Color::hex(0)));
+            scene.push_quad(Quad::new(Rect::new(0., 0., 60., 30.), Color::hex(0xffffff).with_alpha(0.1)).backdrop_blurred(6., 1.));
+            scene.push_icon(Icon::new(IconData::cached(DISC), Rect::new(70., 10., 40., 40.), Color::hex(0)));
+            let Some(image) = render(&scene, (120., 60.), 1., solid(0xffffff)) else { return };
+            let sharp_edge = image.pixel(70 + 20, 16)[0]; // just inside the top of the right disc (its edge is at y 13.3)
+            assert!(sharp_edge < 10, "the later icon is untouched by the blur: {sharp_edge}");
+            let blurred_top = image.pixel(30, 16)[0]; // just inside the first disc's top, under the blur panel
+            let blurred_below = image.pixel(30, 40)[0]; // below the panel: still sharp black
+            assert!(blurred_below < 10, "outside the panel the first disc is sharp: {blurred_below}");
+            assert!(blurred_top > blurred_below + 20, "inside the panel its edge is smeared lighter: {blurred_top} vs {blurred_below}");
+        }
+    }
 }

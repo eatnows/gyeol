@@ -11,6 +11,8 @@ mod macos;
 pub mod event;
 pub mod icon;
 mod gpu;
+#[cfg(feature = "svg")]
+mod icon_render;
 mod layout;
 pub mod list;
 pub mod renderer;
