@@ -194,7 +194,8 @@ struct Batch {
 }
 
 pub struct Renderer {
-    surface: wgpu::Surface<'static>,
+    /// `None` for a renderer that only draws offscreen ([`Renderer::offscreen`]).
+    surface: Option<wgpu::Surface<'static>>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -253,7 +254,35 @@ impl Renderer {
                 .ok_or_else(|| Error("the surface cannot be transparent".into()))?;
         }
         surface.configure(&device, &config);
+        Ok(Self::from_parts(Some(surface), device, queue, config, scale_factor))
+    }
 
+    /// A renderer with no window or surface, for [`Renderer::render_to_image`]. The image is
+    /// `size` logical pixels at `scale_factor` device pixels per logical pixel, RGBA8, and transparent
+    /// wherever the scene paints nothing. Blocks until the adapter and device are ready.
+    pub fn offscreen(size: (f32, f32), scale_factor: f32) -> Result<Self> {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::default();
+            let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.map_err(err("request adapter"))?;
+            let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor::default()).await.map_err(err("request device"))?;
+            let config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                // Non-sRGB like the window surface, so colors blend as authored.
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                width: ((size.0 * scale_factor).round() as u32).max(1),
+                height: ((size.1 * scale_factor).round() as u32).max(1),
+                present_mode: wgpu::PresentMode::Fifo,
+                desired_maximum_frame_latency: 2,
+                // Anything but Opaque: a scene with no background starts fully clear.
+                alpha_mode: wgpu::CompositeAlphaMode::PostMultiplied,
+                view_formats: vec![],
+                color_space: Default::default(),
+            };
+            Ok(Self::from_parts(None, device, queue, config, scale_factor))
+        })
+    }
+
+    fn from_parts(surface: Option<wgpu::Surface<'static>>, device: wgpu::Device, queue: wgpu::Queue, config: wgpu::SurfaceConfiguration, scale_factor: f32) -> Self {
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gyeol globals"),
             size: std::mem::size_of::<Globals>() as u64,
@@ -286,7 +315,7 @@ impl Renderer {
         let text = TextSystem::new(&device, config.format, &globals_layout);
         let backdrop = create_backdrop_pipelines(&device, config.format, &globals_layout);
 
-        Ok(Renderer {
+        Renderer {
             surface,
             device,
             queue,
@@ -301,7 +330,7 @@ impl Renderer {
             text,
             backdrop,
             offscreen: None,
-        })
+        }
     }
 
     pub fn resize(&mut self, size: PhysicalSize<u32>, scale_factor: f32) {
@@ -312,7 +341,9 @@ impl Renderer {
         self.config.width = size.width;
         self.config.height = size.height;
         self.offscreen = None;
-        self.surface.configure(&self.device, &self.config);
+        if let Some(surface) = &self.surface {
+            surface.configure(&self.device, &self.config);
+        }
     }
 
     /// The drawable area in logical pixels.
@@ -325,16 +356,69 @@ impl Renderer {
     }
 
     pub fn render(&mut self, scene: &Scene, shaper: &mut Shaper) {
-        let frame = match self.surface.get_current_texture() {
+        let Some(surface) = &self.surface else { return };
+        let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.config);
+                surface.configure(&self.device, &self.config);
                 return;
             }
             _ => return,
         };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.render_to(scene, shaper, &view);
+        self.queue.present(frame);
+    }
 
+    /// Draws `scene` and returns it as tightly packed RGBA8 rows, top to bottom, with premultiplied
+    /// alpha. The image is `logical_size() * scale_factor` pixels; works with or without a window.
+    pub fn render_to_image(&mut self, scene: &Scene, shaper: &mut Shaper) -> Vec<u8> {
+        let (width, height) = (self.config.width, self.config.height);
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("gyeol snapshot"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.render_to(scene, shaper, &view);
+
+        // Copies need each row padded to 256 bytes.
+        let row = width * 4;
+        let padded = row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gyeol snapshot readback"),
+            size: padded as u64 * height as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gyeol snapshot copy") });
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(height) },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        self.queue.submit(Some(encoder.finish()));
+        let slice = buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |result| result.expect("map snapshot buffer"));
+        self.device.poll(wgpu::PollType::wait_indefinitely()).expect("wait for the snapshot copy");
+        let mapped = slice.get_mapped_range().expect("read the snapshot");
+        let mut pixels = Vec::with_capacity((row * height) as usize);
+        for rows in mapped.chunks(padded as usize) {
+            pixels.extend_from_slice(&rows[..row as usize]);
+        }
+        pixels
+    }
+
+    /// Draws `scene` into `view`, a texture of the surface's size and format.
+    fn render_to(&mut self, scene: &Scene, shaper: &mut Shaper, view: &wgpu::TextureView) {
         let (w, h) = self.logical_size();
         self.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&Globals { viewport: [w, h], _pad: [0.; 2] }));
 
@@ -397,7 +481,7 @@ impl Renderer {
         };
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gyeolui frame") });
         if backdrops.is_empty() {
-            let mut pass = begin_pass(&mut encoder, &view, wgpu::LoadOp::Clear(clear));
+            let mut pass = begin_pass(&mut encoder, view, wgpu::LoadOp::Clear(clear));
             self.draw_batches(&mut pass, &batches);
         } else {
             // Blurring needs to sample what is painted so far, which the surface cannot do: paint into an
@@ -445,14 +529,13 @@ impl Renderer {
                 drop(pass);
                 next = end + 1;
             }
-            let mut pass = begin_pass(&mut encoder, &view, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
+            let mut pass = begin_pass(&mut encoder, view, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
             pass.set_pipeline(&self.backdrop.blit);
             pass.set_bind_group(0, &self.globals_group, &[]);
             pass.set_bind_group(1, &offscreen.scene.group, &[]);
             pass.draw(0..3, 0..1);
         }
         self.queue.submit(Some(encoder.finish()));
-        self.queue.present(frame);
     }
 
     fn draw_batches(&self, pass: &mut wgpu::RenderPass<'_>, batches: &[Batch]) {
