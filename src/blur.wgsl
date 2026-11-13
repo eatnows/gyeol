@@ -51,9 +51,14 @@ fn fs_blur(in: PassOut) -> @location(0) vec4<f32> {
     var total = 0.0;
     let n = i32(in.taps);
     for (var i = -n; i <= n; i = i + 1) {
+        // Taps past the edge of the texture are skipped and the rest renormalized. Clamping to the edge
+        // instead would smear the border texels (partly transparent where an edge is anti-aliased)
+        // inwards by the whole blur radius.
+        let p = uv + in.step * f32(i);
+        if p.x < 0.0 || p.y < 0.0 || p.x > 1.0 || p.y > 1.0 { continue; }
         let t = f32(i) / in.sigma;
         let w = exp(-0.5 * t * t);
-        sum = sum + textureSampleLevel(source, samp, uv + in.step * f32(i), 0.0) * w;
+        sum = sum + textureSampleLevel(source, samp, p, 0.0) * w;
         total = total + w;
     }
     return sum / total;

@@ -231,4 +231,13 @@ mod tests {
             assert!(alphas.iter().all(|&a| a >= 254), "scale {scale}: the panel edge is see-through: {alphas:?}");
         }
     }
+
+    #[test]
+    fn a_big_blur_does_not_smear_the_image_border_into_the_panel() {
+        // The wallpaper's outermost pixels are only partly covered at scale 2, so clamping the blur to
+        // them used to make the panel's left part see-through (and show a checkerboard behind it).
+        let Some(image) = render(&walled(34., (240., 160.)), (240., 160.), 2., Background::Transparent) else { return };
+        let alphas: Vec<u8> = (36..200).step_by(4).map(|x| image.pixel(x, 160)[3]).collect();
+        assert!(alphas.iter().all(|&a| a >= 254), "see-through near the left edge: {alphas:?}");
+    }
 }
