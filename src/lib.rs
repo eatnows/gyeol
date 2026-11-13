@@ -10,6 +10,7 @@ mod error;
 mod macos;
 pub mod event;
 pub mod icon;
+pub mod input;
 mod gpu;
 #[cfg(feature = "svg")]
 mod icon_render;
@@ -29,6 +30,7 @@ pub use error::{Error, Result};
 #[cfg(feature = "svg")]
 pub use element::icon;
 pub use event::{Event, Ime, Key, Modifiers, MouseButton, NamedKey, ScrollDelta, SystemTheme};
+pub use input::{cycle_focus, text_input, InputChange, InputStyle, TextInput};
 pub use renderer::Renderer;
 pub use scene::{BackdropBlur, Capped, Color, Gradient, GradientKind, GradientStop, RadialSize, MAX_GRADIENT_LAYERS, MAX_GRADIENT_STOPS, Path, PathCommand, Quad, Rect, Scene, Shadow, Text, MAX_SHADOWS};
 pub use icon::{FillRule, Icon, IconCommand, IconData, IconFill, IconShape, IconStroke, LineCap, LineJoin};
