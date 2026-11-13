@@ -297,6 +297,7 @@ pub(crate) enum Kind<S> {
     Text(String),
     Paths(Vec<Path>),
     Icon(std::sync::Arc<IconData>),
+    Image(crate::image::ImageBuffer, crate::image::ImageView),
 }
 
 /// A node of the UI tree. Build one with [`div`] or [`text`].
@@ -348,6 +349,22 @@ pub fn icon_from<S>(data: std::sync::Arc<IconData>) -> Element<S> {
     style.width = Length::Px(data.view_box.w);
     style.height = Length::Px(data.view_box.h);
     Element { id: None, style, kind: Kind::Icon(data), on_click: None, on_mouse_down: None, on_drag: None, on_mouse_up: None, on_mouse_down_outside: None }
+}
+
+/// A pixel image the app owns, drawn with the zoom, pan and sampling of `view` and clipped to the
+/// element's box. By default the element is as big as the image (`.w()`/`.h()`/`.grow()` resize it;
+/// the image keeps its own pixel size times `view.zoom`). The pixels are read from `buffer` at paint time and
+/// uploaded to the GPU only when its revision changed; see [`crate::image`].
+///
+/// ```ignore
+/// image_surface(&self.canvas, self.view).w(600.).h(400.).on_drag(|s, _, e| { /* e.local -> pixel */ })
+/// ```
+pub fn image_surface<S>(buffer: &crate::image::ImageBuffer, view: crate::image::ImageView) -> Element<S> {
+    let mut style = Style::default();
+    let (w, h) = buffer.size();
+    style.width = Length::Px(w as f32);
+    style.height = Length::Px(h as f32);
+    Element { id: None, style, kind: Kind::Image(buffer.clone(), view), on_click: None, on_mouse_down: None, on_drag: None, on_mouse_up: None, on_mouse_down_outside: None }
 }
 
 impl<S> Element<S> {

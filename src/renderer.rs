@@ -123,6 +123,8 @@ enum BatchKind {
     /// Rasterized icons; `range` indexes this frame's icon draws.
     #[cfg(feature = "svg")]
     Icons,
+    /// App-owned images; `range` indexes this frame's image draws.
+    Images,
 }
 
 /// How far a gaussian is cut off, in standard deviations.
@@ -271,6 +273,7 @@ pub struct Renderer {
     backdrop: BackdropPipelines,
     #[cfg(feature = "svg")]
     icons: crate::icon_render::IconRenderer,
+    images: crate::image_render::ImageRenderer,
     offscreen: Option<Offscreen>,
 }
 
@@ -389,6 +392,7 @@ impl Renderer {
         let backdrop = create_backdrop_pipelines(&device, config.format, &globals_layout);
         #[cfg(feature = "svg")]
         let icons = crate::icon_render::IconRenderer::new(&device, config.format, &globals_layout, &backdrop.tex_layout);
+        let images = crate::image_render::ImageRenderer::new(&device, config.format, &globals_layout, &backdrop.tex_layout);
 
         Renderer {
             surface,
@@ -409,6 +413,7 @@ impl Renderer {
             backdrop,
             #[cfg(feature = "svg")]
             icons,
+            images,
             offscreen: None,
         }
     }
@@ -506,6 +511,11 @@ impl Renderer {
         pixels
     }
 
+    /// Bytes of image pixels uploaded to textures by the latest frame (0 when every image was up to date).
+    pub(crate) fn image_upload_bytes(&self) -> u64 {
+        self.images.uploaded_bytes
+    }
+
     /// Draws `scene` into `view`, a texture of the surface's size and format.
     fn render_to(&mut self, scene: &Scene, shaper: &mut Shaper, view: &wgpu::TextureView) {
         let (w, h) = self.logical_size();
@@ -521,6 +531,7 @@ impl Renderer {
         let mut backdrops: Vec<(BackdropPlan, u32)> = Vec::new(); // plan, index of the quad's instance
         #[cfg(feature = "svg")]
         self.icons.begin_frame();
+        self.images.begin_frame();
         let mut next_text = 0;
         let target_size = (self.config.width, self.config.height);
         for item in &scene.items {
@@ -547,6 +558,10 @@ impl Renderer {
                 }
                 #[cfg(not(feature = "svg"))]
                 Item::Icon(_) => continue, // icons need the `svg` feature to be rasterized
+                Item::Image(image) => match self.images.prepare(&self.device, &self.queue, &self.backdrop.tex_layout, image) {
+                    Some(i) => (BatchKind::Images, i..i + 1, image.clip),
+                    None => continue,
+                },
                 Item::Text(t) => {
                     next_text += 1;
                     (BatchKind::Glyphs, glyph_ranges[next_text - 1].clone(), t.clip)
@@ -568,6 +583,7 @@ impl Renderer {
         self.quad_instances.write(&self.device, &self.queue, bytemuck::cast_slice(&quads));
         #[cfg(feature = "svg")]
         self.icons.upload(&self.device, &self.queue);
+        self.images.upload(&self.device, &self.queue);
         if extras.is_empty() {
             extras.push([0.; 4]); // a storage binding cannot be empty
         }
@@ -672,6 +688,7 @@ impl Renderer {
                 }
                 #[cfg(feature = "svg")]
                 BatchKind::Icons => self.icons.draw(pass, &self.globals_group, batch.range.clone()),
+                BatchKind::Images => self.images.draw(pass, &self.globals_group, batch.range.clone()),
                 BatchKind::Backdrop => {}
             }
         }

@@ -511,4 +511,62 @@ mod tests {
             assert!(blurred_top > blurred_below + 20, "inside the panel its edge is smeared lighter: {blurred_top} vs {blurred_below}");
         }
     }
+
+    fn image_scene(buffer: &crate::ImageBuffer, origin: (f32, f32), zoom: f32, filter: crate::ImageFilter, clip: Option<Rect>) -> Scene {
+        let mut scene = Scene::default();
+        scene.push_image(crate::ImageDraw { buffer: buffer.clone(), origin, zoom, filter, checkerboard: None, opacity: 1., clip });
+        scene
+    }
+
+    #[test]
+    fn an_image_is_zoomed_with_hard_pixels_and_clipped_to_its_rectangle() {
+        let buffer = crate::ImageBuffer::from_rgba(2, 2, [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]].concat()).unwrap();
+        let scene = image_scene(&buffer, (5., 5.), 10., crate::ImageFilter::Nearest, Some(Rect::new(0., 0., 20., 20.)));
+        let Some(image) = render(&scene, (40., 40.), 1., solid(0x202020)) else { return };
+        assert_eq!(image.pixel(10, 10), [255, 0, 0, 255], "the first pixel, magnified");
+        assert_eq!(image.pixel(14, 14), [255, 0, 0, 255], "still inside it: a hard edge");
+        assert_eq!(image.pixel(16, 10), [0, 255, 0, 255], "the second pixel");
+        assert_eq!(image.pixel(10, 16), [0, 0, 255, 255]);
+        assert_eq!(image.pixel(10, 4), [0x20, 0x20, 0x20, 255], "above the image: the background");
+        assert_eq!(image.pixel(22, 10), [0x20, 0x20, 0x20, 255], "the image runs to x=25 but the clip ends at 20");
+        // The same, auto-filtered at 10x, is nearest too; and Linear smooths the edge.
+        let smooth = image_scene(&buffer, (5., 5.), 10., crate::ImageFilter::Linear, None);
+        let Some(image) = render(&smooth, (40., 40.), 1., solid(0x202020)) else { return };
+        let edge = image.pixel(15, 10);
+        assert!(edge[0] > 60 && edge[0] < 200 && edge[1] > 60 && edge[1] < 200, "between red and green at their border: {edge:?}");
+        let auto = image_scene(&buffer, (5., 5.), 10., crate::ImageFilter::Auto, None);
+        let Some(image) = render(&auto, (40., 40.), 1., solid(0x202020)) else { return };
+        assert_eq!(image.pixel(14, 10), [255, 0, 0, 255]);
+        let small = image_scene(&buffer, (5., 5.), 1., crate::ImageFilter::Auto, None);
+        let Some(image) = render(&small, (40., 40.), 1., solid(0x202020)) else { return };
+        assert_eq!(image.pixel(5, 5), [255, 0, 0, 255], "at 1x each pixel lands on a pixel");
+        assert_eq!(image.pixel(6, 5), [0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn transparent_pixels_show_the_checkerboard_and_the_background() {
+        let buffer = crate::ImageBuffer::new(8, 8);
+        buffer.write_rect(crate::PixelRect::new(0, 0, 4, 8), &[128, 0, 0, 128].repeat(32)); // half-transparent red on the left
+        let mut scene = Scene::default();
+        let (light, dark) = (Color::hex(0xffffff), Color::hex(0x000000));
+        scene.push_image(crate::ImageDraw {
+            buffer: buffer.clone(),
+            origin: (0., 0.),
+            zoom: 4.,
+            filter: crate::ImageFilter::Nearest,
+            checkerboard: Some(crate::Checkerboard { light, dark, cell: 8. }),
+            opacity: 1.,
+            clip: None,
+        });
+        let Some(image) = render(&scene, (32., 32.), 1., solid(0x336699)) else { return };
+        // Right half is transparent image: the checkerboard (cells of 8) shows, never the background.
+        let (a, b) = (image.pixel(20, 2), image.pixel(28, 2));
+        assert_eq!([a[0], a[1], a[2]], [255, 255, 255], "first cell is light");
+        assert_eq!([b[0], b[1], b[2]], [0, 0, 0], "the next is dark");
+        assert_eq!(image.pixel(20, 10)[0], 0, "and the row below flips");
+        // Left half: half-transparent red over the checker: over white it is pink, over black dark red.
+        let (over_light, over_dark) = (image.pixel(2, 2), image.pixel(10, 2));
+        assert!(over_light[0] > 200 && over_light[1] > 100 && over_light[1] < 140, "{over_light:?}");
+        assert!(over_dark[0] > 100 && over_dark[0] < 140 && over_dark[1] < 10, "{over_dark:?}");
+    }
 }

@@ -54,6 +54,8 @@ pub(crate) struct Node<S> {
     paths: Vec<Path>,
     /// A vector icon and the tint it inherited.
     icon: Option<(std::sync::Arc<crate::icon::IconData>, Color)>,
+    /// A pixel image and how it is placed.
+    image: Option<(crate::image::ImageBuffer, crate::image::ImageView)>,
     cursor: Cursor,
     on_click: Option<Handler<S>>,
     on_mouse_down: Option<MouseHandler<S>>,
@@ -366,6 +368,19 @@ pub(crate) fn layout_and_paint<S>(
         if let Some((data, color)) = &node.icon {
             scene.push_icon(crate::icon::Icon::new(data.clone(), node.bounds, text_color(i, *color).faded(fade[i])).clipped(node.clip));
         }
+        if let Some((buffer, view)) = &node.image {
+            // The image never paints outside its element.
+            let clip = Some(node.clip.map_or(node.bounds, |c| c.intersect(&node.bounds)));
+            scene.push_image(crate::image::ImageDraw {
+                buffer: buffer.clone(),
+                origin: (node.bounds.x + view.pan.0, node.bounds.y + view.pan.1),
+                zoom: view.zoom,
+                filter: view.filter,
+                checkerboard: view.checkerboard,
+                opacity: fade[i],
+                clip,
+            });
+        }
         if let (Some(color), true) = (node.scrollbar, node.scroll_max.1 > 0.) {
             let (view_h, content_h) = (node.bounds.h, node.bounds.h + node.scroll_max.1);
             let thumb_h = (view_h * view_h / content_h).max(THUMB_MIN).min(view_h);
@@ -419,6 +434,7 @@ fn build<S>(
         text: None,
         paths: Vec::new(),
         icon: None,
+        image: None,
         cursor: style.cursor,
         on_click,
         on_mouse_down,
@@ -453,6 +469,10 @@ fn build<S>(
         Kind::Icon(data) => {
             nodes[index].icon = Some((data, text_color));
             tree.new_leaf(taffy_style).expect("icon leaf")
+        }
+        Kind::Image(buffer, view) => {
+            nodes[index].image = Some((buffer, view));
+            tree.new_leaf(taffy_style).expect("image leaf")
         }
     };
     nodes[index].taffy_id = taffy_id;
@@ -1081,5 +1101,22 @@ mod tests {
         assert_eq!(b(&laid, 4), (175., 65., 30., 40.), "right/bottom from the parent's far corner");
         assert_eq!(b(&laid, 5), (10., 10., 200., 100.), "inset(0) fills the parent");
         assert_eq!(b(&laid, 6), (10., 110., 380., 10.), "the next sibling sits right below the parent");
+    }
+
+    #[test]
+    fn an_image_surface_is_sized_by_its_buffer_placed_by_its_view_and_clipped_to_its_box() {
+        use crate::{image::{ImageBuffer, ImageView}, element::image_surface};
+        let buffer = ImageBuffer::new(40, 30);
+        let view = ImageView::new().zoom(2.).pan(-10., 5.);
+        let root: Element<()> = div().p(10.).child(image_surface(&buffer, view)).child(image_surface(&buffer, view).w(50.).h(20.).opacity(0.5));
+        let (_, scene) = layout_and_paint(root, (200., 200.), (0., 0.), Color::hex(0xffffff), &mut Shaper::new(), &mut ScrollStore::new());
+        let images: Vec<_> = scene.images().collect();
+        assert_eq!(images.len(), 2);
+        // First: 40x30 at (10, 10); the image's corner is at pan from there.
+        assert_eq!((images[0].origin, images[0].zoom, images[0].clip), ((0., 15.), 2., Some(Rect::new(10., 10., 40., 30.))));
+        // Second: resized by the style, below the first; the clip is its own box, not the image's.
+        assert_eq!((images[1].origin, images[1].clip), ((0., 45.), Some(Rect::new(10., 40., 50., 20.))));
+        assert!(images[1].opacity < 0.6 && images[0].opacity == 1.);
+        assert_eq!(images[0].buffer.id(), buffer.id(), "the element shares the app's buffer");
     }
 }
