@@ -214,6 +214,34 @@ pub trait App {
     fn scene(&mut self, cx: &mut Cx) -> Scene;
 }
 
+/// How a window looks regardless of the system's light or dark setting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Appearance {
+    /// Follow the system (the default).
+    #[default]
+    System,
+    Dark,
+    Light,
+}
+
+/// The blur-and-tint recipe of the window's vibrancy (macOS `NSVisualEffectMaterial`); see
+/// [`WindowOptions::vibrancy_material`]. Materials other than the first two adapt to the window's
+/// [`Appearance`]: with `Dark` they give a dark translucent glass.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Material {
+    /// The default: the light, nearly opaque backdrop used behind a window's content.
+    #[default]
+    UnderWindowBackground,
+    /// A dark translucent heads-up-display panel, dark whatever the appearance.
+    HudWindow,
+    Sidebar,
+    Popover,
+    Menu,
+    FullScreenUI,
+    UnderPageBackground,
+    Titlebar,
+}
+
 /// How the window is opened.
 #[derive(Clone, Debug)]
 pub struct WindowOptions {
@@ -233,6 +261,11 @@ pub struct WindowOptions {
     pub traffic_lights: Option<(f32, f32)>,
     /// macOS: blur what is behind the window (NSVisualEffectView); needs `transparent`. Ignored elsewhere.
     pub vibrancy: bool,
+    /// macOS: the vibrancy recipe; see [`Material`]. Needs `vibrancy`. Ignored elsewhere.
+    pub vibrancy_material: Material,
+    /// macOS: force a light or dark window, whatever the system setting. This decides how the vibrancy
+    /// material is tinted and what [`Cx::system_theme`] reports. Ignored elsewhere.
+    pub appearance: Appearance,
     /// macOS: deliver every mouse and pen movement instead of letting AppKit merge them to one per
     /// frame, so [`Cx::pointer_samples`] holds the device's full-rate samples. Costs more events.
     /// Applies to the whole app. Ignored elsewhere (pen input is not implemented there).
@@ -241,7 +274,7 @@ pub struct WindowOptions {
 
 impl WindowOptions {
     pub fn new(title: impl Into<String>) -> Self {
-        WindowOptions { title: title.into(), size: (900., 600.), min_size: None, transparent: false, transparent_titlebar: false, traffic_lights: None, vibrancy: false, raw_pointer_samples: false }
+        WindowOptions { title: title.into(), size: (900., 600.), min_size: None, transparent: false, transparent_titlebar: false, traffic_lights: None, vibrancy: false, vibrancy_material: Material::UnderWindowBackground, appearance: Appearance::System, raw_pointer_samples: false }
     }
 
     pub fn size(mut self, width: f32, height: f32) -> Self {
@@ -271,6 +304,16 @@ impl WindowOptions {
 
     pub fn vibrancy(mut self, on: bool) -> Self {
         self.vibrancy = on;
+        self
+    }
+
+    pub fn vibrancy_material(mut self, material: Material) -> Self {
+        self.vibrancy_material = material;
+        self
+    }
+
+    pub fn appearance(mut self, appearance: Appearance) -> Self {
+        self.appearance = appearance;
         self
     }
 
@@ -443,8 +486,10 @@ impl<A: App> ApplicationHandler for Shell<A> {
         }
         #[cfg(target_os = "macos")]
         {
+            // Appearance first: the vibrancy material is tinted by the window's appearance.
+            crate::macos::set_appearance(&window, self.options.appearance);
             if self.options.vibrancy {
-                crate::macos::add_vibrancy(&window);
+                crate::macos::add_vibrancy(&window, self.options.vibrancy_material);
             }
             if let Some(at) = self.options.traffic_lights {
                 crate::macos::place_traffic_lights(&window, at);

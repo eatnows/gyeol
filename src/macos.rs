@@ -3,7 +3,9 @@
 pub mod pen;
 
 use objc2::rc::Retained;
+use crate::shell::{Appearance, Material};
 use objc2_app_kit::{
+    NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
     NSAutoresizingMaskOptions, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
     NSWindow, NSWindowButton, NSWindowOrderingMode,
 };
@@ -49,19 +51,63 @@ pub fn place_traffic_lights(window: &Window, (x, y): (f32, f32)) {
     }
 }
 
+fn ns_material(material: Material) -> NSVisualEffectMaterial {
+    match material {
+        Material::UnderWindowBackground => NSVisualEffectMaterial::UnderWindowBackground,
+        Material::HudWindow => NSVisualEffectMaterial::HUDWindow,
+        Material::Sidebar => NSVisualEffectMaterial::Sidebar,
+        Material::Popover => NSVisualEffectMaterial::Popover,
+        Material::Menu => NSVisualEffectMaterial::Menu,
+        Material::FullScreenUI => NSVisualEffectMaterial::FullScreenUI,
+        Material::UnderPageBackground => NSVisualEffectMaterial::UnderPageBackground,
+        Material::Titlebar => NSVisualEffectMaterial::Titlebar,
+    }
+}
+
+/// Forces the window to the dark or light Aqua appearance; `System` leaves it following the system.
+pub fn set_appearance(window: &Window, appearance: Appearance) {
+    let Some(ns) = ns_window(window) else { return };
+    // SAFETY: the appearance names are AppKit's own statics, and setAppearance is a plain setter.
+    let named = unsafe {
+        match appearance {
+            Appearance::System => return,
+            Appearance::Dark => NSAppearance::appearanceNamed(NSAppearanceNameDarkAqua),
+            Appearance::Light => NSAppearance::appearanceNamed(NSAppearanceNameAqua),
+        }
+    };
+    unsafe { ns.setAppearance(named.as_deref()) };
+}
+
 /// Puts a behind-window blur (an NSVisualEffectView) under the content view. Needs a transparent window.
-pub fn add_vibrancy(window: &Window) {
+pub fn add_vibrancy(window: &Window, material: Material) {
     let (Some(ns), Some(mtm)) = (ns_window(window), MainThreadMarker::new()) else { return };
     let Some(content) = ns.contentView() else { return };
     let Some(frame_view) = (unsafe { content.superview() }) else { return };
     // SAFETY: plain AppKit setters on a view we just created, on the main thread (checked via `mtm`).
     unsafe {
         let effect = NSVisualEffectView::new(mtm);
-        effect.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
+        effect.setMaterial(ns_material(material));
         effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+        // Active, not FollowsWindowActiveState: the glass must not go flat gray when the window loses focus.
         effect.setState(NSVisualEffectState::Active);
+        effect.setEmphasized(false);
         effect.setFrame(content.frame());
         effect.setAutoresizingMask(NSAutoresizingMaskOptions::NSViewWidthSizable | NSAutoresizingMaskOptions::NSViewHeightSizable);
         frame_view.addSubview_positioned_relativeTo(&effect, NSWindowOrderingMode::NSWindowBelow, Some(&content));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_material_maps_to_its_own_appkit_material() {
+        use Material::*;
+        let all = [UnderWindowBackground, HudWindow, Sidebar, Popover, Menu, FullScreenUI, UnderPageBackground, Titlebar];
+        let mapped: Vec<isize> = all.iter().map(|m| ns_material(*m).0).collect();
+        assert_eq!(mapped, [21, 13, 7, 6, 5, 15, 22, 3], "AppKit's raw values");
+        assert_eq!(Material::default(), UnderWindowBackground, "the default keeps the old look");
+        assert_eq!(Appearance::default(), Appearance::System);
     }
 }

@@ -41,5 +41,5 @@ pub use scene::{BackdropBlur, Capped, Color, Gradient, GradientKind, GradientSto
 pub use icon::{FillRule, Icon, IconCommand, IconData, IconFill, IconShape, IconStroke, LineCap, LineJoin};
 pub use list::{list_rows, uniform_list};
 pub use shaper::{Shaper, TextStyle};
-pub use shell::{run, run_with, App, Cx, Platform, WindowOptions};
+pub use shell::{run, run_with, App, Appearance, Cx, Material, Platform, WindowOptions};
 pub use view::{run_view, run_view_with, View};
