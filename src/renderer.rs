@@ -295,7 +295,7 @@ impl Renderer {
             label: Some("gyeol globals layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -431,7 +431,7 @@ impl Renderer {
     /// Draws `scene` into `view`, a texture of the surface's size and format.
     fn render_to(&mut self, scene: &Scene, shaper: &mut Shaper, view: &wgpu::TextureView) {
         let (w, h) = self.logical_size();
-        self.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&Globals { viewport: [w, h], _pad: [0.; 2] }));
+        self.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&Globals { viewport: [w, h], scale: self.scale_factor, _pad: 0. }));
 
         // Glyphs first (they may upload to the atlas), then walk the scene in painting order and group
         // neighbouring items of the same kind and clip into batches.

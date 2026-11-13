@@ -1,6 +1,7 @@
 struct Globals {
     viewport: vec2<f32>,
-    _pad: vec2<f32>,
+    scale: f32, // device pixels per logical pixel: edges are anti-aliased over one device pixel
+    _pad: f32,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -85,15 +86,15 @@ fn sd_shape(p: vec2<f32>, size: vec2<f32>, radii: vec4<f32>) -> f32 {
 // How much of a shape with signed distance `d` is covered once blurred by a CSS blur radius.
 // A smoothstep over +-blur stands in for the gaussian (sigma = blur / 2) edge.
 fn blurred_cover(d: f32, blur: f32) -> f32 {
-    if blur <= 0.5 { return clamp(0.5 - d, 0.0, 1.0); }
+    if blur <= 0.5 { return clamp(0.5 - d * globals.scale, 0.0, 1.0); }
     return 1.0 - smoothstep(-blur, blur, d);
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let d = sd_shape(in.local, in.size, in.radii);
-    let outer = clamp(0.5 - d, 0.0, 1.0);
-    let inner = clamp(0.5 - (d + in.border_width), 0.0, 1.0);
+    let outer = clamp(0.5 - d * globals.scale, 0.0, 1.0);
+    let inner = clamp(0.5 - (d + in.border_width) * globals.scale, 0.0, 1.0);
     let ring = outer - inner;
     // Premultiplied fill color, flat or a CSS-style linear gradient (interpolated premultiplied).
     var base = vec4<f32>(in.background.rgb * in.background.a, in.background.a);

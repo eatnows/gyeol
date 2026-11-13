@@ -1,12 +1,13 @@
 //! Small wgpu helpers shared by the renderer's pipelines.
 use bytemuck::{Pod, Zeroable};
 
-/// Per-frame uniforms: the drawable size in logical pixels.
+/// Per-frame uniforms: the drawable size in logical pixels and the device pixels per logical pixel.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub(crate) struct Globals {
     pub viewport: [f32; 2],
-    pub _pad: [f32; 2],
+    pub scale: f32,
+    pub _pad: f32,
 }
 
 /// A GPU buffer that grows (never shrinks) to fit what is written to it each frame.

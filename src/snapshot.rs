@@ -182,6 +182,21 @@ mod tests {
         assert_eq!(checker.pixel(5, 5), [0, 255, 0, 255], "an opaque quad hides it");
     }
 
+    #[test]
+    fn an_edge_on_a_device_pixel_boundary_is_not_blurred_at_any_scale() {
+        // Edges are anti-aliased over one device pixel, not one logical pixel: at scale 2 the outermost
+        // pixel of a quad whose edge sits on a pixel boundary is fully covered.
+        let mut scene = Scene::default();
+        scene.push_quad(Quad::new(Rect::new(0., 0., 10., 10.), Color::hex(0x00ff00)));
+        for scale in [1., 2., 3.] {
+            let Some(image) = render(&scene, (20., 10.), scale, Background::Transparent) else { return };
+            let n = (10. * scale) as u32;
+            assert_eq!(image.pixel(0, 0), [0, 255, 0, 255], "scale {scale}: the corner pixel");
+            assert_eq!(image.pixel(n - 1, 5), [0, 255, 0, 255], "scale {scale}: the last covered column");
+            assert_eq!(image.pixel(n, 5)[3], 0, "scale {scale}: the first column outside");
+        }
+    }
+
     /// Black stripes, 4px on and 4px off, with a nearly clear panel over the middle.
     fn striped(blur: bool) -> Scene {
         let mut scene = Scene { background: Some(Color::hex(0xffffff)), ..Default::default() };

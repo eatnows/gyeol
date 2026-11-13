@@ -3,7 +3,8 @@
 
 struct Globals {
     viewport: vec2<f32>,
-    _pad: vec2<f32>,
+    scale: f32, // device pixels per logical pixel: edges are anti-aliased over one device pixel
+    _pad: f32,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -129,7 +130,7 @@ fn coverage(p: vec2<f32>, size: vec2<f32>, radii: vec4<f32>) -> f32 {
     radius = min(radius, min(half_size.x, half_size.y));
     let q = abs(p) - half_size + vec2<f32>(radius, radius);
     let d = length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - radius;
-    return clamp(0.5 - d, 0.0, 1.0);
+    return clamp(0.5 - d * globals.scale, 0.0, 1.0);
 }
 
 // Step 1: clear the scene inside the shape (dst * (1 - coverage)), so the blurred copy replaces it.
