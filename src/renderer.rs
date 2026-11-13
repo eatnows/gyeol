@@ -252,6 +252,16 @@ struct Batch {
     clip: Option<Rect>,
 }
 
+/// The result of [`Renderer::acquire`].
+pub enum Acquired {
+    Ready(wgpu::SurfaceTexture),
+    /// The window cannot show anything now (occluded, minimized, locked screen); skip drawing until it
+    /// is visible again, which the window system announces.
+    Hidden,
+    /// No frame this time (the surface was reconfigured or timed out); try again shortly.
+    Retry,
+}
+
 pub struct Renderer {
     /// `None` for a renderer that only draws offscreen ([`Renderer::offscreen`]).
     surface: Option<wgpu::Surface<'static>>,
@@ -450,15 +460,28 @@ impl Renderer {
     }
 
     pub fn render(&mut self, scene: &Scene, shaper: &mut Shaper) {
-        let Some(surface) = &self.surface else { return };
-        let frame = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+        if let Acquired::Ready(frame) = self.acquire() {
+            self.render_acquired(frame, scene, shaper);
+        }
+    }
+
+    /// Takes the next window frame to draw into. Do this before building the scene: when the window
+    /// cannot show a frame (hidden, minimized, screen locked) there is no point laying anything out.
+    pub fn acquire(&mut self) -> Acquired {
+        let Some(surface) = &self.surface else { return Acquired::Hidden };
+        match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => Acquired::Ready(frame),
+            wgpu::CurrentSurfaceTexture::Occluded => Acquired::Hidden,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 surface.configure(&self.device, &self.config);
-                return;
+                Acquired::Retry
             }
-            _ => return,
-        };
+            _ => Acquired::Retry,
+        }
+    }
+
+    /// Draws `scene` into a frame from [`Renderer::acquire`] and shows it.
+    pub fn render_acquired(&mut self, frame: wgpu::SurfaceTexture, scene: &Scene, shaper: &mut Shaper) {
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.render_to(scene, shaper, &view);
         self.queue.present(frame);

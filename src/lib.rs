@@ -36,7 +36,7 @@ pub use event::{Event, Ime, Key, Modifiers, MouseButton, NamedKey, ScrollDelta, 
 pub use image::{Checkerboard, ImageBuffer, ImageDraw, ImageFilter, ImageView, PixelRect};
 pub use input::{cycle_focus, text_input, InputChange, InputStyle, TextInput};
 pub use pointer::{PointerKind, PointerSample};
-pub use renderer::Renderer;
+pub use renderer::{Acquired, Renderer};
 pub use scene::{BackdropBlur, Capped, Color, Gradient, GradientKind, GradientStop, RadialSize, MAX_GRADIENT_LAYERS, MAX_GRADIENT_STOPS, Path, PathCommand, Quad, Rect, Scene, Shadow, Text, MAX_SHADOWS};
 pub use icon::{FillRule, Icon, IconCommand, IconData, IconFill, IconShape, IconStroke, LineCap, LineJoin};
 pub use list::{list_rows, uniform_list};

@@ -16,7 +16,7 @@ use winit::{
 use crate::{
     error::{err, Result},
     event::{Event, Ime, Key, Modifiers, MouseButton, NamedKey, ScrollDelta, SystemTheme},
-    renderer::Renderer,
+    renderer::{Acquired, Renderer},
     scene::{Rect, Scene},
     shaper::Shaper,
 };
@@ -299,6 +299,7 @@ pub fn run_with(options: WindowOptions, app: impl App) -> Result<()> {
         last_click: None,
         wake_at: None,
         failure: None,
+        trace: std::env::var_os("GYEOL_TRACE_REDRAW").map(|_| RedrawTrace { since: Instant::now(), asked: [0; 5], drawn: 0, skipped: 0 }),
         pen: None,
     };
     event_loop.run_app(&mut shell).map_err(err("run event loop"))?;
@@ -311,6 +312,53 @@ pub fn run_with(options: WindowOptions, app: impl App) -> Result<()> {
 /// Clicks closer together than this in time and space count as a multi-click.
 const MULTI_CLICK_TIME: Duration = Duration::from_millis(500);
 const MULTI_CLICK_DISTANCE: f32 = 5.;
+/// How long to wait before trying again when no frame could be acquired (surface reconfigured or timed out).
+const RETRY_AFTER: Duration = Duration::from_millis(50);
+
+/// Why a redraw was asked for, for [`RedrawTrace`].
+#[derive(Clone, Copy)]
+enum Why {
+    Event,
+    Resize,
+    Timer,
+    Retry,
+    Start,
+}
+
+/// `GYEOL_TRACE_REDRAW=1` prints once a second how many frames were drawn or skipped and who asked
+/// for them. Frames nobody here asked for ("unasked") come from the window system itself.
+struct RedrawTrace {
+    since: Instant,
+    asked: [u32; 5],
+    drawn: u32,
+    skipped: u32,
+}
+
+impl RedrawTrace {
+    fn report(&mut self) {
+        if self.since.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        let asked: u32 = self.asked.iter().sum();
+        let a = self.asked;
+        eprintln!(
+            "[gyeol] frames/s: drawn {} skipped {} | asked: event {} resize {} timer {} retry {} start {} | unasked {}",
+            self.drawn,
+            self.skipped,
+            a[0], a[1], a[2], a[3], a[4],
+            (self.drawn + self.skipped).saturating_sub(asked)
+        );
+        *self = RedrawTrace { since: Instant::now(), asked: [0; 5], drawn: 0, skipped: 0 };
+    }
+}
+
+/// Asks the window for a redraw.
+fn ask(trace: &mut Option<RedrawTrace>, window: &Window, why: Why) {
+    if let Some(t) = trace {
+        t.asked[why as usize] += 1;
+    }
+    window.request_redraw();
+}
 
 struct Shell<A: App> {
     options: WindowOptions,
@@ -323,6 +371,7 @@ struct Shell<A: App> {
     last_click: Option<(Instant, (f32, f32), MouseButton, u32)>,
     wake_at: Option<Instant>,
     failure: Option<crate::Error>,
+    trace: Option<RedrawTrace>,
     pen: Option<crate::pointer::PenInput>,
 }
 
@@ -338,7 +387,7 @@ impl<A: App> Shell<A> {
         };
         let mut cx = Cx::new(&mut self.shaper, self.modifiers, renderer.logical_size(), window.scale_factor() as f32, &platform, &mut self.wake_at).with_pointer(samples, current);
         self.app.event(event, &mut cx);
-        window.request_redraw();
+        ask(&mut self.trace, window, Why::Event);
     }
 
     fn click_count(&mut self, button: MouseButton) -> u32 {
@@ -402,7 +451,7 @@ impl<A: App> ApplicationHandler for Shell<A> {
             }
         }
         self.pen = Some(crate::pointer::PenInput::install(&window, self.options.raw_pointer_samples));
-        window.request_redraw();
+        ask(&mut self.trace, &window, Why::Start);
         self.window = Some(window);
     }
 
@@ -417,19 +466,46 @@ impl<A: App> ApplicationHandler for Shell<A> {
                     crate::macos::place_traffic_lights(&window, at); // AppKit resets them on resize
                 }
                 renderer.resize(size, scale);
-                window.request_redraw();
+                ask(&mut self.trace, &window, Why::Resize);
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 renderer.resize(window.inner_size(), scale);
-                window.request_redraw();
+                ask(&mut self.trace, &window, Why::Resize);
             }
             WindowEvent::RedrawRequested => {
+                // Get the frame first: a window that cannot show one (hidden, minimized, screen locked)
+                // costs nothing, instead of a full layout per redraw request that is thrown away.
+                let frame = match renderer.acquire() {
+                    Acquired::Ready(frame) => frame,
+                    Acquired::Hidden => {
+                        if let Some(t) = &mut self.trace {
+                            t.skipped += 1;
+                            t.report();
+                        }
+                        return;
+                    }
+                    Acquired::Retry => {
+                        // Not a redraw request of its own, or a surface that keeps failing would spin.
+                        let at = Instant::now() + RETRY_AFTER;
+                        self.wake_at = Some(self.wake_at.map_or(at, |w| w.min(at)));
+                        if let Some(t) = &mut self.trace {
+                            t.skipped += 1;
+                            t.asked[Why::Retry as usize] += 1;
+                            t.report();
+                        }
+                        return;
+                    }
+                };
                 self.shaper.begin_frame();
                 let platform = WindowPlatform(&window);
                 let mut cx = Cx::new(&mut self.shaper, self.modifiers, renderer.logical_size(), scale, &platform, &mut self.wake_at);
                 let scene = self.app.scene(&mut cx);
-                renderer.render(&scene, &mut self.shaper);
+                renderer.render_acquired(frame, &scene, &mut self.shaper);
                 self.shaper.end_frame();
+                if let Some(t) = &mut self.trace {
+                    t.drawn += 1;
+                    t.report();
+                }
             }
             WindowEvent::ModifiersChanged(m) => {
                 let state = m.state();
@@ -478,6 +554,8 @@ impl<A: App> ApplicationHandler for Shell<A> {
                 WinitIme::Commit(text) => self.dispatch(Event::Ime(Ime::Commit(text))),
                 WinitIme::Enabled | WinitIme::Disabled => {}
             },
+            // Frames are skipped while the window is hidden; draw as soon as it is visible again.
+            WindowEvent::Occluded(false) => ask(&mut self.trace, &window, Why::Event),
             WindowEvent::Focused(focused) => self.dispatch(Event::FocusChanged(focused)),
             WindowEvent::ThemeChanged(theme) => self.dispatch(Event::ThemeChanged(system_theme(theme))),
             _ => {}
@@ -489,7 +567,7 @@ impl<A: App> ApplicationHandler for Shell<A> {
             Some(at) if Instant::now() >= at => {
                 self.wake_at = None;
                 if let Some(window) = &self.window {
-                    window.request_redraw();
+                    ask(&mut self.trace, window, Why::Timer);
                 }
                 event_loop.set_control_flow(ControlFlow::Wait);
             }
