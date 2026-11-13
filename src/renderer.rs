@@ -137,9 +137,11 @@ fn plan_backdrop(bounds: Rect, clip: Option<Rect>, radius: f32, scale: f32, targ
 
     // The horizontal pass must also cover the rows the vertical pass will read above and below.
     let margin = (sigma * BLUR_SIGMAS).ceil() as u32;
+    // One extra texel on every side: the composite samples these textures bilinearly, and texels outside
+    // the drawn area are empty, so without it the quad's edge pixels would blend with transparent black.
     let to_target = |x0: u32, y0: u32, x1: u32, y1: u32| -> Scissor {
-        let (tx0, ty0) = (x0 / k, y0 / k);
-        let (tx1, ty1) = ((x1.div_ceil(k) + 1).min(dims.0), (y1.div_ceil(k) + 1).min(dims.1));
+        let (tx0, ty0) = ((x0 / k).saturating_sub(1), (y0 / k).saturating_sub(1));
+        let (tx1, ty1) = ((x1.div_ceil(k) + 2).min(dims.0), (y1.div_ceil(k) + 2).min(dims.1));
         (tx0, ty0, tx1 - tx0, ty1 - ty0)
     };
     let tall = to_target(x0, y0.saturating_sub(margin), x1, (y1 + margin).min(th));
@@ -891,7 +893,7 @@ mod tests {
         let plan = plan_backdrop(bounds, None, 4., 1., SCREEN).unwrap();
         assert_eq!(plan.composite, (100, 100, 200, 100));
         // The horizontal pass also covers the rows the vertical pass reads: 3 sigma = 12px above and below.
-        assert_eq!(plan.blur_scissors[0], (100, 88, 201, 125));
+        assert_eq!(plan.blur_scissors[0], (99, 87, 203, 127), "with a texel of slack on each side");
 
         let clipped = plan_backdrop(bounds, Some(Rect::new(0., 0., 150., 150.)), 4., 1., SCREEN).unwrap();
         assert_eq!(clipped.composite, (100, 100, 50, 50));

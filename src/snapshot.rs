@@ -212,4 +212,23 @@ mod tests {
         assert_eq!(sharp.pixel(10, 50), blurred.pixel(10, 50));
         assert_eq!(blurred.pixel(41, 21), sharp.pixel(41, 21), "the rounded corner is not blurred");
     }
+
+    /// An opaque wallpaper over the whole image with a nearly clear blurred panel inset from its edges.
+    fn walled(blur_radius: f32, size: (f32, f32)) -> Scene {
+        let mut scene = Scene::default();
+        scene.push_quad(Quad::new(Rect::new(0., 0., size.0, size.1), Color::hex(0x202040)));
+        let panel = Rect::new(16., 16., size.0 - 32., size.1 - 32.);
+        scene.push_quad(Quad::new(panel, Color::hex(0xffffff).with_alpha(0.1)).rounded(10.).backdrop_blurred(blur_radius, 1.));
+        scene
+    }
+
+    #[test]
+    fn a_blurred_panel_stays_opaque_over_an_opaque_backdrop_right_up_to_its_edge() {
+        for scale in [1., 2.] {
+            let Some(image) = render(&walled(8., (120., 80.)), (120., 80.), scale, Background::Transparent) else { return };
+            let (y, x0) = ((40. * scale) as u32, (16. * scale) as u32);
+            let alphas: Vec<u8> = (x0 - 3..x0 + 8).map(|x| image.pixel(x, y)[3]).collect();
+            assert!(alphas.iter().all(|&a| a >= 254), "scale {scale}: the panel edge is see-through: {alphas:?}");
+        }
+    }
 }
