@@ -79,6 +79,8 @@ pub struct Cx<'a> {
     scale_factor: f32,
     platform: &'a dyn Platform,
     wake_at: &'a mut Option<Instant>,
+    /// The time of this frame or event; [`Cx::request_redraw_after`] counts from it.
+    now: Instant,
     /// Scroll positions and viewport sizes of the previous frame, for building only visible rows.
     pub(crate) scroll_info: std::collections::HashMap<crate::element::ElementId, crate::list::ScrollInfo>,
     /// Regions asked to be scrolled into view; applied once the event has been handled.
@@ -98,7 +100,7 @@ impl<'a> Cx<'a> {
         platform: &'a dyn Platform,
         wake_at: &'a mut Option<Instant>,
     ) -> Self {
-        Cx { shaper, modifiers, size, scale_factor, platform, wake_at, scroll_info: Default::default(), reveals: Vec::new(), pointer_samples: Vec::new(), pointer: None }
+        Cx { shaper, modifiers, size, scale_factor, platform, wake_at, now: Instant::now(), scroll_info: Default::default(), reveals: Vec::new(), pointer_samples: Vec::new(), pointer: None }
     }
 
     /// The drawable area in logical pixels.
@@ -110,9 +112,22 @@ impl<'a> Cx<'a> {
         self.scale_factor
     }
 
-    /// Asks for another frame after `after` (for blinking carets, animations).
+    /// The time this frame or event is being handled at. [`View::tick`](crate::View::tick) gets the same
+    /// value; headless hosts ([`TestHost`](crate::testing::TestHost)) run on their own clock.
+    pub fn now(&self) -> Instant {
+        self.now
+    }
+
+    pub(crate) fn with_now(mut self, now: Instant) -> Self {
+        self.now = now;
+        self
+    }
+
+    /// Asks for another frame after `after` (for blinking carets, animations). Each frame calls
+    /// [`View::tick`](crate::View::tick) first, so an animation advances its state there and asks
+    /// again; the earliest request wins when several are made.
     pub fn request_redraw_after(&mut self, after: Duration) {
-        let at = Instant::now() + after;
+        let at = self.now + after;
         *self.wake_at = Some(self.wake_at.map_or(at, |current| current.min(at)));
     }
 

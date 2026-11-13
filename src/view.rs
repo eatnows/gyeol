@@ -21,6 +21,12 @@ pub trait View: Sized + 'static {
     /// where keyboard and input-method events arrive; the app decides which widget they belong to.
     fn event(&mut self, _event: &Event, _cx: &mut Cx) {}
 
+    /// Called at the start of every frame, right before [`View::view`], with the frame's time. Advance
+    /// time-based state here (an animation, a playing clip) and call
+    /// [`cx.request_redraw_after`](Cx::request_redraw_after) to be called again; nothing redraws on its
+    /// own while no event arrives and no request is pending. Does nothing by default.
+    fn tick(&mut self, _now: std::time::Instant, _cx: &mut Cx) {}
+
     /// The window's background color, behind everything.
     fn background(&self) -> Color {
         Color::hex(0xffffff)
@@ -100,6 +106,8 @@ impl<S: View> App for Host<S> {
 
     fn scene(&mut self, cx: &mut Cx) -> Scene {
         cx.scroll_info = self.scroll_snapshot();
+        let now = cx.now();
+        self.state.tick(now, cx);
         let root = self.state.view(cx);
         let (laid, scene) = layout::layout_and_paint(root, cx.size(), self.mouse, self.state.background(), cx.shaper, &mut self.scroll);
         self.laid = Some(laid);

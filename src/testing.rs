@@ -1,7 +1,7 @@
 //! Running a [`View`] without a window or GPU, for tests: feed it input, look at the scene it paints.
 use std::{
     cell::{Cell, RefCell},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -59,6 +59,8 @@ pub struct TestHost<S: View> {
     scale: f32,
     modifiers: Modifiers,
     wake_at: Option<Instant>,
+    /// The host's own time: it moves only through [`TestHost::advance`].
+    clock: Instant,
     scene: Scene,
     mouse: Option<(f32, f32)>,
     /// Pen samples to attach to the next pointer event.
@@ -82,6 +84,7 @@ impl<S: View> TestHost<S> {
             scale,
             modifiers: Modifiers::default(),
             wake_at: None,
+            clock: Instant::now(),
             scene: Scene::default(),
             mouse: None,
             pointer: Vec::new(),
@@ -146,10 +149,40 @@ impl<S: View> TestHost<S> {
         self.frame();
     }
 
+    /// Lets `duration` of virtual time pass, running the frames that `Cx::request_redraw_after` asked for
+    /// along the way: each runs at the moment it was due (so [`View::tick`] sees that time) and may ask
+    /// for the next. Returns the latest scene.
+    pub fn advance(&mut self, duration: Duration) -> &Scene {
+        let target = self.clock + duration;
+        // A guard against an app that asks to be redrawn immediately and forever.
+        for _ in 0..100_000 {
+            match self.wake_at {
+                Some(at) if at <= target => {
+                    self.clock = self.clock.max(at);
+                    self.wake_at = None;
+                    self.frame();
+                }
+                _ => break,
+            }
+        }
+        self.clock = target;
+        &self.scene
+    }
+
+    /// The host's current virtual time (what `View::tick` and `Cx::now` report).
+    pub fn now(&self) -> Instant {
+        self.clock
+    }
+
+    /// When the app asked to be redrawn next, if it did.
+    pub fn next_wake(&self) -> Option<Instant> {
+        self.wake_at
+    }
+
     /// Paints a frame, as the shell does when the window asks for a redraw.
     pub fn frame(&mut self) -> &Scene {
         self.shaper.begin_frame();
-        let mut cx = Cx::new(&mut self.shaper, self.modifiers, self.size, self.scale, &self.platform, &mut self.wake_at);
+        let mut cx = Cx::new(&mut self.shaper, self.modifiers, self.size, self.scale, &self.platform, &mut self.wake_at).with_now(self.clock);
         self.scene = self.host.scene(&mut cx);
         self.shaper.end_frame();
         &self.scene
@@ -167,7 +200,7 @@ impl<S: View> TestHost<S> {
     pub fn event(&mut self, event: Event) -> &Scene {
         let samples = std::mem::take(&mut self.pointer);
         let current = samples.last().copied();
-        let mut cx = Cx::new(&mut self.shaper, self.modifiers, self.size, self.scale, &self.platform, &mut self.wake_at).with_pointer(samples, current);
+        let mut cx = Cx::new(&mut self.shaper, self.modifiers, self.size, self.scale, &self.platform, &mut self.wake_at).with_pointer(samples, current).with_now(self.clock);
         self.host.event(event, &mut cx);
         self.frame()
     }
@@ -767,5 +800,69 @@ mod tests {
         assert_eq!(log[1], ("drag", PointerKind::Mouse, 1., None));
         assert_eq!(log[2], ("up", PointerKind::Mouse, 0., None));
         assert!(h.state().samples_seen.iter().all(|n| *n == 0), "no platform samples: the list is empty");
+    }
+
+    /// Counts ticks.
+    struct Clock {
+        ticks: Vec<Instant>,
+        interval: Option<Duration>,
+    }
+
+    impl View for Clock {
+        fn tick(&mut self, now: Instant, cx: &mut Cx) {
+            self.ticks.push(now);
+            assert_eq!(now, cx.now());
+            if let Some(every) = self.interval {
+                cx.request_redraw_after(every);
+            }
+        }
+
+        fn view(&self, _cx: &mut Cx) -> Element<Clock> {
+            div().child(text(format!("{} ticks", self.ticks.len())))
+        }
+    }
+
+    fn clock(interval: Option<Duration>) -> TestHost<Clock> {
+        TestHost::new(Clock { ticks: Vec::new(), interval }, (100., 50.))
+    }
+
+    #[test]
+    fn tick_runs_before_view_on_every_frame_so_the_scene_shows_its_changes() {
+        let mut h = clock(None);
+        assert_eq!(h.state().ticks.len(), 1, "the first frame ticks");
+        assert!(h.scene().texts().any(|t| t.content == "1 ticks"), "view saw the state tick had just changed");
+        h.frame();
+        h.mouse_move((5., 5.)); // an event also paints a frame
+        assert_eq!(h.state().ticks.len(), 3);
+        assert!(h.scene().texts().any(|t| t.content == "3 ticks"));
+    }
+
+    #[test]
+    fn request_redraw_after_in_tick_repeats_on_the_hosts_clock() {
+        let every = Duration::from_millis(100);
+        let mut h = clock(Some(every));
+        let start = h.now();
+        assert_eq!(h.state().ticks.len(), 1);
+        assert_eq!(h.next_wake(), Some(start + every));
+        h.advance(Duration::from_millis(99));
+        assert_eq!(h.state().ticks.len(), 1, "not due yet");
+        h.advance(Duration::from_millis(1));
+        assert_eq!(h.state().ticks.len(), 2);
+        h.advance(Duration::from_millis(350));
+        let ticks = &h.state().ticks;
+        assert_eq!(ticks.len(), 5, "three more fell due within 350ms");
+        // Each tick saw the moment it was due, not the end of the advance.
+        let offsets: Vec<u128> = ticks.iter().map(|t| t.duration_since(start).as_millis()).collect();
+        assert_eq!(offsets, [0, 100, 200, 300, 400]);
+        assert_eq!(h.now().duration_since(start), Duration::from_millis(450));
+        assert!(h.scene().texts().any(|t| t.content == "5 ticks"));
+    }
+
+    #[test]
+    fn an_app_that_never_asks_is_not_redrawn_by_time() {
+        let mut h = clock(None);
+        h.advance(Duration::from_secs(10));
+        assert_eq!(h.state().ticks.len(), 1);
+        assert_eq!(h.next_wake(), None);
     }
 }

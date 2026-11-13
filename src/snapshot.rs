@@ -39,11 +39,14 @@ pub struct Options {
     /// Where the pointer is for [`view_with`], in logical pixels: elements under it are hovered, so
     /// hover styles show. `None` leaves the pointer at the window's top-left corner like a fresh window.
     pub pointer: Option<(f32, f32)>,
+    /// For [`view_with`]: time to let pass before the picture is taken, running the frames and
+    /// [`View::tick`] calls the app asked for (an animation shown at second `advance`).
+    pub advance: std::time::Duration,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { background: Background::Checkerboard, pointer: None }
+        Options { background: Background::Checkerboard, pointer: None, advance: std::time::Duration::ZERO }
     }
 }
 
@@ -86,6 +89,7 @@ pub fn view_with<S: View>(state: S, size: (f32, f32), scale: f32, options: &Opti
     if let Some(pointer) = options.pointer {
         host.mouse_move(pointer);
     }
+    host.advance(options.advance);
     let mut renderer = Renderer::offscreen(size, scale)?;
     let premultiplied = host.render(&mut renderer);
     Ok(finish(premultiplied, &renderer, options))
