@@ -25,6 +25,9 @@ struct QuadInstance {
     gradient_end: [f32; 4],
     /// `[enabled, angle in radians]`.
     gradient: [f32; 2],
+    /// `[offset x, offset y, blur, unused]`.
+    shadow: [f32; 4],
+    shadow_color: [f32; 4],
 }
 
 impl From<&Quad> for QuadInstance {
@@ -38,6 +41,8 @@ impl From<&Quad> for QuadInstance {
             border_width: q.border_width,
             gradient_end: q.gradient.map_or([0.; 4], |g| g.to.to_array()),
             gradient: q.gradient.map_or([0.; 2], |g| [1., g.angle.to_radians()]),
+            shadow: q.shadow.map_or([0.; 4], |s| [s.offset.0, s.offset.1, s.blur, 0.]),
+            shadow_color: q.shadow.map_or([0.; 4], |s| s.color.to_array()),
         }
     }
 }
@@ -368,7 +373,7 @@ fn create_quad_pipeline(
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &wgpu::vertex_attr_array![
                     0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32,
-                    6 => Float32x4, 7 => Float32x2,
+                    6 => Float32x4, 7 => Float32x2, 8 => Float32x4, 9 => Float32x4,
                 ],
             })],
         },

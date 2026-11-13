@@ -72,6 +72,14 @@ pub struct Gradient {
     pub angle: f32,
 }
 
+/// A blurred, offset copy of a quad's shape. `blur` is a CSS-style blur radius (gaussian sigma = blur / 2).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shadow {
+    pub offset: (f32, f32),
+    pub blur: f32,
+    pub color: Color,
+}
+
 /// A filled rectangle with optional rounded corners and border.
 #[derive(Clone, Copy, Debug)]
 pub struct Quad {
@@ -79,6 +87,8 @@ pub struct Quad {
     /// Fill color; replaced by `gradient` when that is set.
     pub background: Color,
     pub gradient: Option<Gradient>,
+    /// Drawn behind the quad, only outside its shape.
+    pub shadow: Option<Shadow>,
     pub border_color: Color,
     pub border_width: f32,
     /// Corner radii: top-left, top-right, bottom-right, bottom-left.
@@ -89,7 +99,7 @@ pub struct Quad {
 
 impl Quad {
     pub fn new(bounds: Rect, background: Color) -> Quad {
-        Quad { bounds, background, gradient: None, border_color: Color::TRANSPARENT, border_width: 0., corner_radii: [0.; 4], clip: None }
+        Quad { bounds, background, gradient: None, shadow: None, border_color: Color::TRANSPARENT, border_width: 0., corner_radii: [0.; 4], clip: None }
     }
 
     pub fn rounded(mut self, radius: f32) -> Quad {
@@ -116,6 +126,12 @@ impl Quad {
     /// Fills with a linear gradient instead of the flat background.
     pub fn gradient(mut self, angle: f32, from: Color, to: Color) -> Quad {
         self.gradient = Some(Gradient { from, to, angle });
+        self
+    }
+
+    /// Adds an outer drop shadow behind the quad (CSS `box-shadow: x y blur color`).
+    pub fn shadowed(mut self, x: f32, y: f32, blur: f32, color: Color) -> Quad {
+        self.shadow = Some(Shadow { offset: (x, y), blur, color });
         self
     }
 }
@@ -258,6 +274,14 @@ mod tests {
         let quad = Quad::new(Rect::new(0., 0., 10., 10.), a);
         assert_eq!(quad.gradient, None);
         assert_eq!(quad.gradient(150., a, b).gradient, Some(Gradient { from: a, to: b, angle: 150. }));
+    }
+
+    #[test]
+    fn a_quad_shadow_is_recorded_and_defaults_to_none() {
+        let black = Color::hex(0).with_alpha(0.3);
+        let quad = Quad::new(Rect::new(0., 0., 10., 10.), black);
+        assert_eq!(quad.shadow, None);
+        assert_eq!(quad.shadowed(0., 8., 24., black).shadow, Some(Shadow { offset: (0., 8.), blur: 24., color: black }));
     }
 
     #[test]

@@ -14,6 +14,8 @@ struct Instance {
     @location(5) border_width: f32,
     @location(6) gradient_end: vec4<f32>,
     @location(7) gradient: vec2<f32>, // enabled, angle in radians
+    @location(8) shadow: vec4<f32>, // offset x, offset y, blur
+    @location(9) shadow_color: vec4<f32>,
 };
 
 struct VsOut {
@@ -26,6 +28,8 @@ struct VsOut {
     @location(5) border_width: f32,
     @location(6) gradient_end: vec4<f32>,
     @location(7) gradient: vec2<f32>,
+    @location(8) shadow: vec4<f32>,
+    @location(9) shadow_color: vec4<f32>,
 };
 
 @vertex
@@ -35,10 +39,13 @@ fn vs_main(@builtin(vertex_index) index: u32, inst: Instance) -> VsOut {
         vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
     );
     let c = corners[index];
-    let px = inst.pos + c * inst.size;
+    // Grow the quad so the blurred shadow, which spills past the box, has pixels to land on.
+    let pad = select(0.0, inst.shadow.z + max(abs(inst.shadow.x), abs(inst.shadow.y)) + 1.0, inst.shadow_color.a > 0.0);
+    let grown = inst.size + vec2<f32>(pad, pad) * 2.0;
+    let px = inst.pos - vec2<f32>(pad, pad) + c * grown;
     var out: VsOut;
     out.position = vec4<f32>(px.x / globals.viewport.x * 2.0 - 1.0, 1.0 - px.y / globals.viewport.y * 2.0, 0.0, 1.0);
-    out.local = (c - vec2<f32>(0.5, 0.5)) * inst.size;
+    out.local = (c - vec2<f32>(0.5, 0.5)) * grown;
     out.size = inst.size;
     out.background = inst.background;
     out.border_color = inst.border_color;
@@ -46,6 +53,8 @@ fn vs_main(@builtin(vertex_index) index: u32, inst: Instance) -> VsOut {
     out.border_width = inst.border_width;
     out.gradient_end = inst.gradient_end;
     out.gradient = inst.gradient;
+    out.shadow = inst.shadow;
+    out.shadow_color = inst.shadow_color;
     return out;
 }
 
@@ -55,16 +64,28 @@ fn sd_round_box(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
     return length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - radius;
 }
 
+// Signed distance to the quad's rounded shape at `p`, picking the corner radius of the quadrant
+// `p` is in (y grows downwards).
+fn sd_shape(p: vec2<f32>, size: vec2<f32>, radii: vec4<f32>) -> f32 {
+    let half_size = size * 0.5;
+    var radius = radii.x;
+    if p.x >= 0.0 && p.y < 0.0 { radius = radii.y; }
+    if p.x >= 0.0 && p.y >= 0.0 { radius = radii.z; }
+    if p.x < 0.0 && p.y >= 0.0 { radius = radii.w; }
+    radius = min(radius, min(half_size.x, half_size.y));
+    return sd_round_box(p, half_size, radius);
+}
+
+// How much of a shape with signed distance `d` is covered once blurred by a CSS blur radius.
+// A smoothstep over +-blur stands in for the gaussian (sigma = blur / 2) edge.
+fn blurred_cover(d: f32, blur: f32) -> f32 {
+    if blur <= 0.5 { return clamp(0.5 - d, 0.0, 1.0); }
+    return 1.0 - smoothstep(-blur, blur, d);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let half_size = in.size * 0.5;
-    // Pick the corner radius of the quadrant the pixel is in (y grows downwards).
-    var radius = in.radii.x;
-    if in.local.x >= 0.0 && in.local.y < 0.0 { radius = in.radii.y; }
-    if in.local.x >= 0.0 && in.local.y >= 0.0 { radius = in.radii.z; }
-    if in.local.x < 0.0 && in.local.y >= 0.0 { radius = in.radii.w; }
-    radius = min(radius, min(half_size.x, half_size.y));
-    let d = sd_round_box(in.local, half_size, radius);
+    let d = sd_shape(in.local, in.size, in.radii);
     let outer = clamp(0.5 - d, 0.0, 1.0);
     let inner = clamp(0.5 - (d + in.border_width), 0.0, 1.0);
     let ring = outer - inner;
@@ -82,5 +103,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let fill = base.rgb * inner;
     let edge = in.border_color.rgb * in.border_color.a * ring;
     let alpha = base.a * inner + in.border_color.a * ring;
-    return vec4<f32>(fill + edge, alpha);
+    var color = vec4<f32>(fill + edge, alpha);
+    if in.shadow_color.a > 0.0 {
+        // Behind the quad and only outside it, so a translucent fill does not show the shadow through.
+        let ds = sd_shape(in.local - in.shadow.xy, in.size, in.radii);
+        let s = in.shadow_color.a * blurred_cover(ds, in.shadow.z) * (1.0 - outer);
+        color = color + vec4<f32>(in.shadow_color.rgb * s, s);
+    }
+    return color;
 }

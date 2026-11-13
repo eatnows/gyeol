@@ -13,7 +13,7 @@ impl gyeol::App for Hello {
         scene.push_quad(Quad::new(Rect::new(344., 190., (w - 384.).max(40.), 64.), Color::hex(0x2e7d4e).with_alpha(0.35)).rounded(8.).bordered(2., Color::hex(0x2e7d4e)));
         scene.push_quad(Quad::new(Rect::new(40., h - 90., w - 80., 50.), Color::hex(0x0f1720)).rounded(6.));
         // A glass-like card: translucent gradient over a colorful backdrop.
-        scene.push_quad(Quad::new(Rect::new(40., 290., 260., 100.), Color::hex(0x7aa7ff)).rounded(20.).gradient(150., Color::hex(0x7aa7ff), Color::hex(0xff9ecb)));
+        scene.push_quad(Quad::new(Rect::new(40., 290., 260., 100.), Color::hex(0x7aa7ff)).rounded(20.).gradient(150., Color::hex(0x7aa7ff), Color::hex(0xff9ecb)).shadowed(0., 12., 28., Color::hex(0x1b2a6b).with_alpha(0.35)));
         scene.push_quad(
             Quad::new(Rect::new(60., 310., 220., 60.), Color::hex(0xffffff).with_alpha(0.5))
                 .rounded(14.)
