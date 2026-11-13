@@ -29,3 +29,7 @@ winit = "0.30"
 objc2 = "0.5"
 objc2-app-kit = { version = "0.2", features = ["NSWindow", "NSView", "NSButton", "NSControl", "NSResponder", "NSVisualEffectView", "NSApplication"] }
 objc2-foundation = { version = "0.2", features = ["NSGeometry"] }
+
+[[example]]
+name = "snapshot"
+required-features = ["snapshot"]
