@@ -128,6 +128,8 @@ pub struct Cx<'a> {
     pub(crate) pointer_samples: Vec<crate::pointer::PointerSample>,
     /// The reading that belongs to the event being handled, when the platform gave one.
     pub(crate) pointer: Option<crate::pointer::PointerSample>,
+    /// Set by [`Cx::request_close`].
+    pub(crate) close: bool,
 }
 
 impl<'a> Cx<'a> {
@@ -139,7 +141,14 @@ impl<'a> Cx<'a> {
         platform: &'a dyn Platform,
         wake_at: &'a mut Option<Instant>,
     ) -> Self {
-        Cx { shaper, modifiers, size, scale_factor, platform, wake_at, now: Instant::now(), scroll_info: Default::default(), reveals: Vec::new(), pointer_samples: Vec::new(), pointer: None }
+        Cx { shaper, modifiers, size, scale_factor, platform, wake_at, now: Instant::now(), scroll_info: Default::default(), reveals: Vec::new(), pointer_samples: Vec::new(), pointer: None, close: false }
+    }
+
+    /// Closes the window and ends the app once the current event is handled, without asking
+    /// [`View::close_requested`](crate::View::close_requested) again. Use it after the user confirmed
+    /// closing. Call it from an event or click handler.
+    pub fn request_close(&mut self) {
+        self.close = true;
     }
 
     /// The drawable area in logical pixels.
@@ -272,8 +281,23 @@ pub trait App {
     /// Called for every input event. A new frame is drawn afterwards.
     fn event(&mut self, _event: Event, _cx: &mut Cx) {}
 
+    /// Called when the user asks to close the window (its close button, or Cmd+Q / Quit in the Dock
+    /// on macOS). Return `true` to allow it (the default) or `false` to keep the window open; the app
+    /// can close it later with [`Cx::request_close`].
+    fn close_requested(&mut self, _cx: &mut Cx) -> bool {
+        true
+    }
+
     /// Called when a frame is needed.
     fn scene(&mut self, cx: &mut Cx) -> Scene;
+}
+
+/// What other threads or the system can wake the event loop with.
+#[derive(Clone, Copy, Debug)]
+enum UserEvent {
+    DisplayOptionsChanged,
+    /// The app was asked to quit without a window event (Cmd+Q, Dock > Quit).
+    QuitRequested,
 }
 
 /// How a window looks regardless of the system's light or dark setting.
@@ -392,7 +416,7 @@ pub fn run(title: &str, app: impl App) -> Result<()> {
 
 /// Opens a window as described by `options` and runs `app` until the window is closed.
 pub fn run_with(options: WindowOptions, app: impl App) -> Result<()> {
-    let event_loop = EventLoop::new().map_err(err("create event loop"))?;
+    let event_loop = EventLoop::<UserEvent>::with_user_event().build().map_err(err("create event loop"))?;
     let proxy = event_loop.create_proxy();
     let mut shell = Shell {
         options,
@@ -406,6 +430,9 @@ pub fn run_with(options: WindowOptions, app: impl App) -> Result<()> {
         wake_at: None,
         failure: None,
         proxy,
+        exit_requested: false,
+        #[cfg(target_os = "macos")]
+        quit_hooked: false,
         #[cfg(target_os = "macos")]
         display_observer: None,
         trace: std::env::var_os("GYEOL_TRACE_REDRAW").map(|_| RedrawTrace { since: Instant::now(), asked: [0; 5], drawn: 0, skipped: 0 }),
@@ -483,7 +510,11 @@ struct Shell<A: App> {
     wake_at: Option<Instant>,
     failure: Option<crate::Error>,
     /// Wakes the event loop from outside it (a system notification) so it can deliver an event.
-    proxy: winit::event_loop::EventLoopProxy<()>,
+    proxy: winit::event_loop::EventLoopProxy<UserEvent>,
+    /// Set when the app asked to close (`Cx::request_close`); the loop exits once the event is done.
+    exit_requested: bool,
+    #[cfg(target_os = "macos")]
+    quit_hooked: bool,
     /// Keeps the Reduce Transparency subscription alive for as long as the shell runs.
     #[cfg(target_os = "macos")]
     display_observer: Option<crate::macos::display::DisplayOptionsObserver>,
@@ -506,7 +537,22 @@ impl<A: App> Shell<A> {
         };
         let mut cx = Cx::new(&mut self.shaper, self.modifiers, renderer.logical_size(), window.scale_factor() as f32, &platform, &mut self.wake_at).with_pointer(samples, current);
         self.app.event(event, &mut cx);
+        self.exit_requested |= cx.close;
         ask(&mut self.trace, window, Why::Event);
+    }
+
+    /// The window's close button or a quit command: exit unless the app says no.
+    fn close_requested(&mut self, event_loop: &ActiveEventLoop) {
+        let (Some(window), Some(renderer)) = (self.window.as_ref(), self.renderer.as_ref()) else { return event_loop.exit() };
+        let platform = WindowPlatform(window);
+        let mut cx = Cx::new(&mut self.shaper, self.modifiers, renderer.logical_size(), window.scale_factor() as f32, &platform, &mut self.wake_at);
+        let allowed = self.app.close_requested(&mut cx);
+        if allowed || cx.close {
+            event_loop.exit();
+        } else {
+            // The app may have changed state to show a confirmation.
+            ask(&mut self.trace, window, Why::Event);
+        }
     }
 
     fn click_count(&mut self, button: MouseButton) -> u32 {
@@ -527,7 +573,7 @@ impl<A: App> Shell<A> {
     }
 }
 
-impl<A: App> ApplicationHandler for Shell<A> {
+impl<A: App> ApplicationHandler<UserEvent> for Shell<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -576,23 +622,31 @@ impl<A: App> ApplicationHandler for Shell<A> {
         {
             let proxy = self.proxy.clone();
             self.display_observer = Some(crate::macos::display::DisplayOptionsObserver::new(move || {
-                let _ = proxy.send_event(());
+                let _ = proxy.send_event(UserEvent::DisplayOptionsChanged);
             }));
+            if !self.quit_hooked {
+                let proxy = self.proxy.clone();
+                self.quit_hooked = crate::macos::quit::install(move || {
+                    let _ = proxy.send_event(UserEvent::QuitRequested);
+                });
+            }
         }
         ask(&mut self.trace, &window, Why::Start);
         self.window = Some(window);
     }
 
-    /// The only user event is "a display option changed" (sent from the system notification).
-    fn user_event(&mut self, _: &ActiveEventLoop, _: ()) {
-        self.dispatch(Event::DisplayOptionsChanged);
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        match event {
+            UserEvent::DisplayOptionsChanged => self.dispatch(Event::DisplayOptionsChanged),
+            UserEvent::QuitRequested => self.close_requested(event_loop),
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         let (Some(window), Some(renderer)) = (self.window.clone(), self.renderer.as_mut()) else { return };
         let scale = window.scale_factor() as f32;
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => self.close_requested(event_loop),
             WindowEvent::Resized(size) => {
                 #[cfg(target_os = "macos")]
                 if let Some(at) = self.options.traffic_lights {
@@ -713,6 +767,9 @@ impl<A: App> ApplicationHandler for Shell<A> {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.exit_requested {
+            event_loop.exit();
+        }
         if !self.dropped.is_empty() {
             let files = std::mem::take(&mut self.dropped);
             self.dispatch(Event::FilesDropped(files));

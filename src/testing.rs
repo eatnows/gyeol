@@ -81,6 +81,7 @@ pub struct TestHost<S: View> {
     scale: f32,
     modifiers: Modifiers,
     wake_at: Option<Instant>,
+    exit: bool,
     /// The host's own time: it moves only through [`TestHost::advance`].
     clock: Instant,
     scene: Scene,
@@ -106,6 +107,7 @@ impl<S: View> TestHost<S> {
             scale,
             modifiers: Modifiers::default(),
             wake_at: None,
+            exit: false,
             clock: Instant::now(),
             scene: Scene::default(),
             mouse: None,
@@ -152,6 +154,22 @@ impl<S: View> TestHost<S> {
     pub fn set_reduce_transparency(&mut self, reduce: bool) -> &Scene {
         self.platform.reduce_transparency.set(reduce);
         self.event(Event::DisplayOptionsChanged)
+    }
+
+    /// Simulates the user closing the window (close button, Cmd+Q). Asks the app through
+    /// [`View::close_requested`]; returns whether the app would exit, which [`TestHost::exited`] also
+    /// reports afterwards.
+    pub fn request_close_for_test(&mut self) -> bool {
+        let mut cx = Cx::new(&mut self.shaper, self.modifiers, self.size, self.scale, &self.platform, &mut self.wake_at).with_now(self.clock);
+        let allowed = self.host.close_requested(&mut cx);
+        self.exit |= allowed || cx.close;
+        self.frame();
+        self.exit
+    }
+
+    /// Whether the app has closed the window: it allowed a close request or called `Cx::request_close`.
+    pub fn exited(&self) -> bool {
+        self.exit
     }
 
     /// Delivers a drop of `files` (as one [`Event::FilesDropped`], after a hover that ends).
@@ -253,6 +271,7 @@ impl<S: View> TestHost<S> {
         let current = samples.last().copied();
         let mut cx = Cx::new(&mut self.shaper, self.modifiers, self.size, self.scale, &self.platform, &mut self.wake_at).with_pointer(samples, current).with_now(self.clock);
         self.host.event(event, &mut cx);
+        self.exit |= cx.close;
         self.frame()
     }
 
@@ -944,5 +963,50 @@ mod tests {
         h.set_reduce_transparency(true);
         h.set_reduce_transparency(false);
         assert_eq!((h.state().events, h.state().seen.as_slice()), (2, &[true, false][..]), "the app sees each change, with the new value already in effect");
+    }
+}
+
+#[cfg(test)]
+mod close_tests {
+    use super::*;
+    use crate::{div, Color, Element};
+
+    struct Guard {
+        dirty: bool,
+        asked: u32,
+    }
+
+    impl View for Guard {
+        fn view(&self, _cx: &mut Cx) -> Element<Guard> {
+            div().child(div().id("btn").w(50.).h(20.).bg(Color::hex(0x888888)).on_click(|_: &mut Guard, cx| cx.request_close()))
+        }
+        fn close_requested(&mut self, _cx: &mut Cx) -> bool {
+            self.asked += 1;
+            !self.dirty
+        }
+    }
+
+    #[test]
+    fn a_refused_close_keeps_the_window_until_the_app_closes_it() {
+        let mut h = TestHost::new(Guard { dirty: true, asked: 0 }, (200., 100.));
+        assert!(!h.request_close_for_test());
+        assert!(!h.exited());
+        h.click((10., 10.));
+        assert!(h.exited(), "Cx::request_close closes without asking again");
+        assert_eq!(h.state().asked, 1);
+    }
+
+    #[test]
+    fn an_allowed_close_exits_and_the_default_allows() {
+        let mut h = TestHost::new(Guard { dirty: false, asked: 0 }, (200., 100.));
+        assert!(h.request_close_for_test());
+        assert!(h.exited());
+        struct Plain;
+        impl View for Plain {
+            fn view(&self, _: &mut Cx) -> Element<Plain> {
+                div()
+            }
+        }
+        assert!(TestHost::new(Plain, (50., 50.)).request_close_for_test());
     }
 }

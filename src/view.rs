@@ -27,6 +27,13 @@ pub trait View: Sized + 'static {
     /// own while no event arrives and no request is pending. Does nothing by default.
     fn tick(&mut self, _now: std::time::Instant, _cx: &mut Cx) {}
 
+    /// Called when the user asks to close the window: its close button, or Cmd+Q and the Dock's Quit
+    /// on macOS. Return `true` to allow it (the default) or `false` to keep the window open, for
+    /// example while showing a "save changes?" prompt; close later with [`Cx::request_close`].
+    fn close_requested(&mut self, _cx: &mut Cx) -> bool {
+        true
+    }
+
     /// The window's background color, behind everything.
     fn background(&self) -> Color {
         Color::hex(0xffffff)
@@ -102,6 +109,10 @@ impl<S: View> App for Host<S> {
         self.state.event(&event, cx);
         let reveals = std::mem::take(&mut cx.reveals);
         self.apply_reveals(reveals);
+    }
+
+    fn close_requested(&mut self, cx: &mut Cx) -> bool {
+        self.state.close_requested(cx)
     }
 
     fn scene(&mut self, cx: &mut Cx) -> Scene {

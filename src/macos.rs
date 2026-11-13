@@ -3,6 +3,7 @@
 pub mod dialog;
 pub mod display;
 pub mod pen;
+pub mod quit;
 
 use objc2::rc::Retained;
 use crate::shell::{Appearance, Material};
