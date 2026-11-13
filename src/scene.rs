@@ -89,6 +89,8 @@ pub struct Quad {
     pub gradient: Option<Gradient>,
     /// Drawn behind the quad, only outside its shape.
     pub shadow: Option<Shadow>,
+    /// Drawn inside the quad (inside its border), clipped to its rounded shape.
+    pub inset_shadow: Option<Shadow>,
     pub border_color: Color,
     pub border_width: f32,
     /// Corner radii: top-left, top-right, bottom-right, bottom-left.
@@ -99,7 +101,7 @@ pub struct Quad {
 
 impl Quad {
     pub fn new(bounds: Rect, background: Color) -> Quad {
-        Quad { bounds, background, gradient: None, shadow: None, border_color: Color::TRANSPARENT, border_width: 0., corner_radii: [0.; 4], clip: None }
+        Quad { bounds, background, gradient: None, shadow: None, inset_shadow: None, border_color: Color::TRANSPARENT, border_width: 0., corner_radii: [0.; 4], clip: None }
     }
 
     pub fn rounded(mut self, radius: f32) -> Quad {
@@ -126,6 +128,12 @@ impl Quad {
     /// Fills with a linear gradient instead of the flat background.
     pub fn gradient(mut self, angle: f32, from: Color, to: Color) -> Quad {
         self.gradient = Some(Gradient { from, to, angle });
+        self
+    }
+
+    /// Adds an inner shadow or highlight (CSS `box-shadow: inset x y blur color`).
+    pub fn inset_shadowed(mut self, x: f32, y: f32, blur: f32, color: Color) -> Quad {
+        self.inset_shadow = Some(Shadow { offset: (x, y), blur, color });
         self
     }
 
@@ -282,6 +290,14 @@ mod tests {
         let quad = Quad::new(Rect::new(0., 0., 10., 10.), black);
         assert_eq!(quad.shadow, None);
         assert_eq!(quad.shadowed(0., 8., 24., black).shadow, Some(Shadow { offset: (0., 8.), blur: 24., color: black }));
+    }
+
+    #[test]
+    fn a_quad_inset_shadow_is_separate_from_the_outer_shadow() {
+        let white = Color::hex(0xffffff).with_alpha(0.6);
+        let quad = Quad::new(Rect::new(0., 0., 10., 10.), white).inset_shadowed(0., 1., 0., white);
+        assert_eq!(quad.inset_shadow, Some(Shadow { offset: (0., 1.), blur: 0., color: white }));
+        assert_eq!(quad.shadow, None);
     }
 
     #[test]

@@ -16,6 +16,8 @@ struct Instance {
     @location(7) gradient: vec2<f32>, // enabled, angle in radians
     @location(8) shadow: vec4<f32>, // offset x, offset y, blur
     @location(9) shadow_color: vec4<f32>,
+    @location(10) inset: vec4<f32>,
+    @location(11) inset_color: vec4<f32>,
 };
 
 struct VsOut {
@@ -30,6 +32,8 @@ struct VsOut {
     @location(7) gradient: vec2<f32>,
     @location(8) shadow: vec4<f32>,
     @location(9) shadow_color: vec4<f32>,
+    @location(10) inset: vec4<f32>,
+    @location(11) inset_color: vec4<f32>,
 };
 
 @vertex
@@ -55,6 +59,8 @@ fn vs_main(@builtin(vertex_index) index: u32, inst: Instance) -> VsOut {
     out.gradient = inst.gradient;
     out.shadow = inst.shadow;
     out.shadow_color = inst.shadow_color;
+    out.inset = inst.inset;
+    out.inset_color = inst.inset_color;
     return out;
 }
 
@@ -104,6 +110,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let edge = in.border_color.rgb * in.border_color.a * ring;
     let alpha = base.a * inner + in.border_color.a * ring;
     var color = vec4<f32>(fill + edge, alpha);
+    if in.inset_color.a > 0.0 {
+        // The inset shadow is whatever the offset, blurred copy of the shape leaves uncovered, kept
+        // inside the border. It goes over the fill, under the border ring.
+        let di = sd_shape(in.local - in.inset.xy, in.size, in.radii);
+        let s = in.inset_color.a * (1.0 - blurred_cover(di + in.border_width, in.inset.z)) * inner;
+        let over = vec4<f32>(in.inset_color.rgb * s, s);
+        color = over + vec4<f32>(fill, base.a * inner) * (1.0 - s) + vec4<f32>(edge, in.border_color.a * ring);
+    }
     if in.shadow_color.a > 0.0 {
         // Behind the quad and only outside it, so a translucent fill does not show the shadow through.
         let ds = sd_shape(in.local - in.shadow.xy, in.size, in.radii);

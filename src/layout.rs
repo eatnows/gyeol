@@ -41,6 +41,7 @@ pub(crate) struct Node<S> {
     hover_background: Option<Color>,
     gradient: Option<Gradient>,
     shadow: Option<Shadow>,
+    inset_shadow: Option<Shadow>,
     border_width: f32,
     border_color: Color,
     radii: [f32; 4],
@@ -267,10 +268,11 @@ pub(crate) fn layout_and_paint<S>(
             scene.push_quad(thumbs.pop().expect("checked").1);
         }
         let fill = if hovered.contains(&i) { node.hover_background.or(node.background) } else { node.background };
-        if fill.is_some() || node.gradient.is_some() || node.shadow.is_some() || node.border_width > 0. {
+        if fill.is_some() || node.gradient.is_some() || node.shadow.is_some() || node.inset_shadow.is_some() || node.border_width > 0. {
             let mut quad = Quad::new(node.bounds, fill.unwrap_or(Color::TRANSPARENT)).rounded_corners(node.radii).clipped(node.clip);
             quad.gradient = node.gradient;
             quad.shadow = node.shadow;
+            quad.inset_shadow = node.inset_shadow;
             if node.border_width > 0. {
                 quad = quad.bordered(node.border_width, node.border_color);
             }
@@ -324,6 +326,7 @@ fn build<S>(
         hover_background: style.hover_background,
         gradient: style.gradient,
         shadow: style.shadow,
+        inset_shadow: style.inset_shadow,
         border_width: style.border_width,
         border_color: style.border_color,
         radii: style.radii,
@@ -563,6 +566,16 @@ mod tests {
         let (_, scene) = lay(div().w(50.).h(50.).shadow(0., 4., 12., color), &mut shaper);
         let quad = scene.quads().next().expect("a shadow alone still paints a quad");
         assert_eq!(quad.shadow, Some(Shadow { offset: (0., 4.), blur: 12., color }));
+    }
+
+    #[test]
+    fn an_inset_shadow_reaches_the_painted_quad() {
+        let mut shaper = Shaper::new();
+        let white = Color::hex(0xffffff).with_alpha(0.6);
+        let (_, scene) = lay(div().w(50.).h(50.).bg(Color::hex(0x336699)).inset_shadow(0., 1., 0., white), &mut shaper);
+        let quad = scene.quads().next().unwrap();
+        assert_eq!(quad.inset_shadow, Some(Shadow { offset: (0., 1.), blur: 0., color: white }));
+        assert_eq!(quad.shadow, None);
     }
 
     fn list(rows: usize) -> Element<()> {

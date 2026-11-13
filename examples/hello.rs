@@ -18,7 +18,9 @@ impl gyeol::App for Hello {
             Quad::new(Rect::new(60., 310., 220., 60.), Color::hex(0xffffff).with_alpha(0.5))
                 .rounded(14.)
                 .gradient(140., Color::hex(0xffffff).with_alpha(0.55), Color::hex(0xffffff).with_alpha(0.15))
-                .bordered(1., Color::hex(0xffffff).with_alpha(0.6)),
+                .bordered(1., Color::hex(0xffffff).with_alpha(0.6))
+                .inset_shadowed(0., 1., 0., Color::hex(0xffffff).with_alpha(0.6))
+                .shadowed(0., 6., 16., Color::hex(0x1b2a6b).with_alpha(0.18)),
         );
         let ink = Color::hex(0x14202b);
         scene.push_text(Text::new((60., 58.), "gyeol 결", 34., ink));

@@ -117,6 +117,7 @@ pub struct Style {
     pub background: Option<Color>,
     pub gradient: Option<Gradient>,
     pub shadow: Option<Shadow>,
+    pub inset_shadow: Option<Shadow>,
     pub border_width: f32,
     pub border_color: Color,
     /// Corner radii: top-left, top-right, bottom-right, bottom-left.
@@ -160,6 +161,7 @@ impl Default for Style {
             background: None,
             gradient: None,
             shadow: None,
+            inset_shadow: None,
             border_width: 0.,
             border_color: Color::TRANSPARENT,
             radii: [0.; 4],
@@ -515,6 +517,12 @@ impl<S> Element<S> {
     /// Drops a blurred shadow behind the element (CSS `box-shadow: x y blur color`).
     pub fn shadow(mut self, x: f32, y: f32, blur: f32, color: Color) -> Self {
         self.style.shadow = Some(Shadow { offset: (x, y), blur, color });
+        self
+    }
+
+    /// Draws a shadow or highlight inside the element (CSS `box-shadow: inset x y blur color`).
+    pub fn inset_shadow(mut self, x: f32, y: f32, blur: f32, color: Color) -> Self {
+        self.style.inset_shadow = Some(Shadow { offset: (x, y), blur, color });
         self
     }
 
