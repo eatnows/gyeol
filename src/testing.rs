@@ -21,6 +21,7 @@ struct Recorder {
     ime_allowed: Cell<bool>,
     ime_area: Cell<Option<Rect>>,
     theme: Cell<Option<SystemTheme>>,
+    reduce_transparency: Cell<bool>,
     clipboard: RefCell<Option<String>>,
 }
 
@@ -43,6 +44,10 @@ impl Platform for Recorder {
 
     fn clipboard_text(&self) -> Option<String> {
         self.clipboard.borrow().clone()
+    }
+
+    fn reduce_transparency(&self) -> bool {
+        self.reduce_transparency.get()
     }
 
     fn set_clipboard_text(&self, text: &str) {
@@ -123,6 +128,13 @@ impl<S: View> TestHost<S> {
     pub fn set_system_theme(&mut self, theme: SystemTheme) -> &Scene {
         self.platform.theme.set(Some(theme));
         self.event(Event::ThemeChanged(theme))
+    }
+
+    /// Pretends the user switched the system's Reduce Transparency option and delivers
+    /// [`Event::DisplayOptionsChanged`]; `Cx::reduce_transparency` reports `reduce` from now on.
+    pub fn set_reduce_transparency(&mut self, reduce: bool) -> &Scene {
+        self.platform.reduce_transparency.set(reduce);
+        self.event(Event::DisplayOptionsChanged)
     }
 
     /// The text on the (fake) clipboard.
@@ -864,5 +876,34 @@ mod tests {
         h.advance(Duration::from_secs(10));
         assert_eq!(h.state().ticks.len(), 1);
         assert_eq!(h.next_wake(), None);
+    }
+
+    #[derive(Default)]
+    struct Opts {
+        events: u32,
+        seen: Vec<bool>,
+    }
+
+    impl View for Opts {
+        fn view(&self, _cx: &mut Cx) -> Element<Opts> {
+            div()
+        }
+
+        fn event(&mut self, event: &Event, cx: &mut Cx) {
+            if matches!(event, Event::DisplayOptionsChanged) {
+                self.events += 1;
+                self.seen.push(cx.reduce_transparency());
+            }
+        }
+    }
+
+    #[test]
+    fn changing_reduce_transparency_updates_cx_and_notifies_the_app() {
+        let mut h = TestHost::new(Opts::default(), (50., 50.));
+        h.frame();
+        assert_eq!(h.state().events, 0);
+        h.set_reduce_transparency(true);
+        h.set_reduce_transparency(false);
+        assert_eq!((h.state().events, h.state().seen.as_slice()), (2, &[true, false][..]), "the app sees each change, with the new value already in effect");
     }
 }

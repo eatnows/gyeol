@@ -30,6 +30,10 @@ pub trait Platform {
     fn theme(&self) -> Option<SystemTheme>;
     fn clipboard_text(&self) -> Option<String>;
     fn set_clipboard_text(&self, text: &str);
+    /// Whether the user asked the system to reduce transparency (macOS: Accessibility > Display).
+    fn reduce_transparency(&self) -> bool {
+        false
+    }
 }
 
 struct WindowPlatform<'a>(&'a Window);
@@ -59,6 +63,13 @@ impl Platform for WindowPlatform<'_> {
         if let Ok(mut clipboard) = arboard::Clipboard::new() {
             let _ = clipboard.set_text(text.to_string());
         }
+    }
+
+    fn reduce_transparency(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        return crate::macos::display::reduce_transparency();
+        #[cfg(not(target_os = "macos"))]
+        false
     }
 }
 
@@ -187,6 +198,13 @@ impl<'a> Cx<'a> {
             Some(s) => (s.kind, s.pressure, s.tilt),
             None => (crate::pointer::PointerKind::Mouse, if pressed { 1. } else { 0. }, None),
         }
+    }
+
+    /// Whether the user turned on the system's "Reduce transparency" accessibility option, so translucent
+    /// glass should give way to solid colors. macOS only; false elsewhere. [`Event::DisplayOptionsChanged`]
+    /// is sent when it changes.
+    pub fn reduce_transparency(&self) -> bool {
+        self.platform.reduce_transparency()
     }
 
     /// Whether the system prefers dark or light (light when it does not say).
@@ -331,6 +349,7 @@ pub fn run(title: &str, app: impl App) -> Result<()> {
 /// Opens a window as described by `options` and runs `app` until the window is closed.
 pub fn run_with(options: WindowOptions, app: impl App) -> Result<()> {
     let event_loop = EventLoop::new().map_err(err("create event loop"))?;
+    let proxy = event_loop.create_proxy();
     let mut shell = Shell {
         options,
         app,
@@ -342,6 +361,9 @@ pub fn run_with(options: WindowOptions, app: impl App) -> Result<()> {
         last_click: None,
         wake_at: None,
         failure: None,
+        proxy,
+        #[cfg(target_os = "macos")]
+        display_observer: None,
         trace: std::env::var_os("GYEOL_TRACE_REDRAW").map(|_| RedrawTrace { since: Instant::now(), asked: [0; 5], drawn: 0, skipped: 0 }),
         pen: None,
     };
@@ -414,6 +436,11 @@ struct Shell<A: App> {
     last_click: Option<(Instant, (f32, f32), MouseButton, u32)>,
     wake_at: Option<Instant>,
     failure: Option<crate::Error>,
+    /// Wakes the event loop from outside it (a system notification) so it can deliver an event.
+    proxy: winit::event_loop::EventLoopProxy<()>,
+    /// Keeps the Reduce Transparency subscription alive for as long as the shell runs.
+    #[cfg(target_os = "macos")]
+    display_observer: Option<crate::macos::display::DisplayOptionsObserver>,
     trace: Option<RedrawTrace>,
     pen: Option<crate::pointer::PenInput>,
 }
@@ -496,8 +523,20 @@ impl<A: App> ApplicationHandler for Shell<A> {
             }
         }
         self.pen = Some(crate::pointer::PenInput::install(&window, self.options.raw_pointer_samples));
+        #[cfg(target_os = "macos")]
+        {
+            let proxy = self.proxy.clone();
+            self.display_observer = Some(crate::macos::display::DisplayOptionsObserver::new(move || {
+                let _ = proxy.send_event(());
+            }));
+        }
         ask(&mut self.trace, &window, Why::Start);
         self.window = Some(window);
+    }
+
+    /// The only user event is "a display option changed" (sent from the system notification).
+    fn user_event(&mut self, _: &ActiveEventLoop, _: ()) {
+        self.dispatch(Event::DisplayOptionsChanged);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {

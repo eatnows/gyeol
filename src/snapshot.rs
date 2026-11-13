@@ -42,11 +42,14 @@ pub struct Options {
     /// For [`view_with`]: time to let pass before the picture is taken, running the frames and
     /// [`View::tick`] calls the app asked for (an animation shown at second `advance`).
     pub advance: std::time::Duration,
+    /// For [`view_with`]: render as if the system's Reduce Transparency option were on, so
+    /// `Cx::reduce_transparency` is true (the app also receives `Event::DisplayOptionsChanged`).
+    pub reduce_transparency: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { background: Background::Checkerboard, pointer: None, advance: std::time::Duration::ZERO }
+        Options { background: Background::Checkerboard, pointer: None, advance: std::time::Duration::ZERO, reduce_transparency: false }
     }
 }
 
@@ -88,6 +91,9 @@ pub fn view_with<S: View>(state: S, size: (f32, f32), scale: f32, options: &Opti
     let mut host = TestHost::with_scale(state, size, scale);
     if let Some(pointer) = options.pointer {
         host.mouse_move(pointer);
+    }
+    if options.reduce_transparency {
+        host.set_reduce_transparency(true);
     }
     host.advance(options.advance);
     let mut renderer = Renderer::offscreen(size, scale)?;

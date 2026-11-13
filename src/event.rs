@@ -94,4 +94,7 @@ pub enum Event {
     FocusChanged(bool),
     /// The operating system switched between light and dark.
     ThemeChanged(SystemTheme),
+    /// A system display accessibility option changed, such as macOS's Reduce Transparency (see
+    /// [`Cx::reduce_transparency`](crate::Cx::reduce_transparency)); read the options again.
+    DisplayOptionsChanged,
 }

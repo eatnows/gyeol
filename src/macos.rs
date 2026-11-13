@@ -1,5 +1,6 @@
 //! macOS window chrome that winit does not expose: traffic-light placement and window vibrancy,
 //! plus [`pen`] input.
+pub mod display;
 pub mod pen;
 
 use objc2::rc::Retained;
