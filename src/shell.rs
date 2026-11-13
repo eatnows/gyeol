@@ -178,11 +178,19 @@ pub struct WindowOptions {
     /// A window whose unpainted (clear) parts show what is behind it; pair with a `Scene` background of
     /// `None` or a translucent color.
     pub transparent: bool,
+    /// macOS: hide the title and make the titlebar transparent, letting the content fill the whole window
+    /// (the traffic-light buttons float over it). Ignored elsewhere.
+    pub transparent_titlebar: bool,
+    /// macOS: where to put the traffic-light buttons, as (x from the left, y from the top) in logical
+    /// pixels. Ignored elsewhere.
+    pub traffic_lights: Option<(f32, f32)>,
+    /// macOS: blur what is behind the window (NSVisualEffectView); needs `transparent`. Ignored elsewhere.
+    pub vibrancy: bool,
 }
 
 impl WindowOptions {
     pub fn new(title: impl Into<String>) -> Self {
-        WindowOptions { title: title.into(), size: (900., 600.), min_size: None, transparent: false }
+        WindowOptions { title: title.into(), size: (900., 600.), min_size: None, transparent: false, transparent_titlebar: false, traffic_lights: None, vibrancy: false }
     }
 
     pub fn size(mut self, width: f32, height: f32) -> Self {
@@ -197,6 +205,21 @@ impl WindowOptions {
 
     pub fn transparent(mut self, transparent: bool) -> Self {
         self.transparent = transparent;
+        self
+    }
+
+    pub fn transparent_titlebar(mut self, on: bool) -> Self {
+        self.transparent_titlebar = on;
+        self
+    }
+
+    pub fn traffic_lights(mut self, x: f32, y: f32) -> Self {
+        self.traffic_lights = Some((x, y));
+        self
+    }
+
+    pub fn vibrancy(mut self, on: bool) -> Self {
+        self.vibrancy = on;
         self
     }
 }
@@ -285,6 +308,11 @@ impl<A: App> ApplicationHandler for Shell<A> {
         if let Some((w, h)) = self.options.min_size {
             attributes = attributes.with_min_inner_size(LogicalSize::new(w, h));
         }
+        #[cfg(target_os = "macos")]
+        if self.options.transparent_titlebar {
+            use winit::platform::macos::WindowAttributesExtMacOS;
+            attributes = attributes.with_titlebar_transparent(true).with_title_hidden(true).with_fullsize_content_view(true);
+        }
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
             Err(e) => {
@@ -301,6 +329,15 @@ impl<A: App> ApplicationHandler for Shell<A> {
                 return;
             }
         }
+        #[cfg(target_os = "macos")]
+        {
+            if self.options.vibrancy {
+                crate::macos::add_vibrancy(&window);
+            }
+            if let Some(at) = self.options.traffic_lights {
+                crate::macos::place_traffic_lights(&window, at);
+            }
+        }
         window.request_redraw();
         self.window = Some(window);
     }
@@ -311,6 +348,10 @@ impl<A: App> ApplicationHandler for Shell<A> {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
+                #[cfg(target_os = "macos")]
+                if let Some(at) = self.options.traffic_lights {
+                    crate::macos::place_traffic_lights(&window, at); // AppKit resets them on resize
+                }
                 renderer.resize(size, scale);
                 window.request_redraw();
             }

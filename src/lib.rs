@@ -6,6 +6,8 @@
 
 pub mod element;
 mod error;
+#[cfg(target_os = "macos")]
+mod macos;
 pub mod event;
 mod gpu;
 mod layout;
