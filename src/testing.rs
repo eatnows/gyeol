@@ -1,6 +1,7 @@
 //! Running a [`View`] without a window or GPU, for tests: feed it input, look at the scene it paints.
 use std::{
     cell::{Cell, RefCell},
+    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -22,6 +23,8 @@ struct Recorder {
     ime_area: Cell<Option<Rect>>,
     theme: Cell<Option<SystemTheme>>,
     reduce_transparency: Cell<bool>,
+    next_pick: RefCell<Option<PathBuf>>,
+    picks: RefCell<Vec<String>>,
     clipboard: RefCell<Option<String>>,
 }
 
@@ -50,9 +53,23 @@ impl Platform for Recorder {
         self.reduce_transparency.get()
     }
 
+    fn pick_file(&self, filters: &[(&str, &[&str])]) -> Option<PathBuf> {
+        self.picks.borrow_mut().push(format!("open {}", describe(filters)));
+        self.next_pick.borrow_mut().take()
+    }
+
+    fn pick_save_path(&self, default_name: &str, filters: &[(&str, &[&str])]) -> Option<PathBuf> {
+        self.picks.borrow_mut().push(format!("save {default_name} {}", describe(filters)));
+        self.next_pick.borrow_mut().take()
+    }
+
     fn set_clipboard_text(&self, text: &str) {
         *self.clipboard.borrow_mut() = Some(text.to_string());
     }
+}
+
+fn describe(filters: &[(&str, &[&str])]) -> String {
+    filters.iter().map(|(name, exts)| format!("{name}:{}", exts.join(","))).collect::<Vec<_>>().join(";")
 }
 
 /// A [`View`] running headlessly at a fixed window size (scale factor 1).
@@ -135,6 +152,28 @@ impl<S: View> TestHost<S> {
     pub fn set_reduce_transparency(&mut self, reduce: bool) -> &Scene {
         self.platform.reduce_transparency.set(reduce);
         self.event(Event::DisplayOptionsChanged)
+    }
+
+    /// Delivers a drop of `files` (as one [`Event::FilesDropped`], after a hover that ends).
+    pub fn drop_files(&mut self, files: Vec<PathBuf>) -> &Scene {
+        self.event(Event::FilesHovered(false));
+        self.event(Event::FilesDropped(files))
+    }
+
+    /// Delivers [`Event::FilesHovered`] as if files were dragged over (or off) the window.
+    pub fn hover_files(&mut self, over: bool) -> &Scene {
+        self.event(Event::FilesHovered(over))
+    }
+
+    /// What the next `Cx::pick_file` / `Cx::pick_save_path` returns (once; afterwards `None`, as if
+    /// cancelled). `None` here means the user cancels.
+    pub fn set_next_pick(&mut self, path: Option<PathBuf>) {
+        *self.platform.next_pick.borrow_mut() = path;
+    }
+
+    /// The dialogs the app opened so far, as `"open Images:png,jpg"` / `"save name.png Images:png"`.
+    pub fn picks(&self) -> Vec<String> {
+        self.platform.picks.borrow().clone()
     }
 
     /// The text on the (fake) clipboard.

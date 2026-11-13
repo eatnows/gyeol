@@ -34,6 +34,14 @@ pub trait Platform {
     fn reduce_transparency(&self) -> bool {
         false
     }
+    /// Shows a modal "open" dialog; `None` when cancelled or not implemented on this platform.
+    fn pick_file(&self, _filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
+        None
+    }
+    /// Shows a modal "save" dialog; `None` when cancelled or not implemented on this platform.
+    fn pick_save_path(&self, _default_name: &str, _filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
+        None
+    }
 }
 
 struct WindowPlatform<'a>(&'a Window);
@@ -70,6 +78,26 @@ impl Platform for WindowPlatform<'_> {
         return crate::macos::display::reduce_transparency();
         #[cfg(not(target_os = "macos"))]
         false
+    }
+
+    fn pick_file(&self, filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
+        #[cfg(target_os = "macos")]
+        return crate::macos::dialog::pick_file(filters);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = filters;
+            None
+        }
+    }
+
+    fn pick_save_path(&self, default_name: &str, filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
+        #[cfg(target_os = "macos")]
+        return crate::macos::dialog::pick_save_path(default_name, filters);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (default_name, filters);
+            None
+        }
     }
 }
 
@@ -198,6 +226,22 @@ impl<'a> Cx<'a> {
             Some(s) => (s.kind, s.pressure, s.tilt),
             None => (crate::pointer::PointerKind::Mouse, if pressed { 1. } else { 0. }, None),
         }
+    }
+
+    /// Shows the system's modal "open file" dialog and returns the chosen path, or `None` if the user
+    /// cancelled. `filters` are `(description, extensions)` pairs such as `("Images", &["png", "jpg"])`;
+    /// empty allows any file. The dialog blocks the app until it closes. Implemented on macOS
+    /// (NSOpenPanel; the panel takes one combined extension list, so descriptions are not shown); on
+    /// other platforms this is **not implemented** and always returns `None`.
+    pub fn pick_file(&self, filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
+        self.platform.pick_file(filters)
+    }
+
+    /// Shows the system's modal "save" dialog pre-filled with `default_name` and returns the chosen
+    /// path (the file is not created), or `None` if cancelled. `filters` as for [`Cx::pick_file`].
+    /// macOS only (NSSavePanel); **not implemented** elsewhere, where it returns `None`.
+    pub fn pick_save_path(&self, default_name: &str, filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
+        self.platform.pick_save_path(default_name, filters)
     }
 
     /// Whether the user turned on the system's "Reduce transparency" accessibility option, so translucent
@@ -366,6 +410,8 @@ pub fn run_with(options: WindowOptions, app: impl App) -> Result<()> {
         display_observer: None,
         trace: std::env::var_os("GYEOL_TRACE_REDRAW").map(|_| RedrawTrace { since: Instant::now(), asked: [0; 5], drawn: 0, skipped: 0 }),
         pen: None,
+        dropped: Vec::new(),
+        files_hovered: false,
     };
     event_loop.run_app(&mut shell).map_err(err("run event loop"))?;
     match shell.failure {
@@ -443,6 +489,9 @@ struct Shell<A: App> {
     display_observer: Option<crate::macos::display::DisplayOptionsObserver>,
     trace: Option<RedrawTrace>,
     pen: Option<crate::pointer::PenInput>,
+    /// Files of the drop in progress; winit reports them one by one, delivered together in `about_to_wait`.
+    dropped: Vec<std::path::PathBuf>,
+    files_hovered: bool,
 }
 
 impl<A: App> Shell<A> {
@@ -640,6 +689,23 @@ impl<A: App> ApplicationHandler for Shell<A> {
             },
             // Frames are skipped while the window is hidden; draw as soon as it is visible again.
             WindowEvent::Occluded(false) => ask(&mut self.trace, &window, Why::Event),
+            WindowEvent::HoveredFile(_) => {
+                if !self.files_hovered {
+                    self.files_hovered = true;
+                    self.dispatch(Event::FilesHovered(true));
+                }
+            }
+            WindowEvent::HoveredFileCancelled => {
+                if std::mem::take(&mut self.files_hovered) {
+                    self.dispatch(Event::FilesHovered(false));
+                }
+            }
+            WindowEvent::DroppedFile(path) => {
+                if std::mem::take(&mut self.files_hovered) {
+                    self.dispatch(Event::FilesHovered(false));
+                }
+                self.dropped.push(path);
+            }
             WindowEvent::Focused(focused) => self.dispatch(Event::FocusChanged(focused)),
             WindowEvent::ThemeChanged(theme) => self.dispatch(Event::ThemeChanged(system_theme(theme))),
             _ => {}
@@ -647,6 +713,10 @@ impl<A: App> ApplicationHandler for Shell<A> {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if !self.dropped.is_empty() {
+            let files = std::mem::take(&mut self.dropped);
+            self.dispatch(Event::FilesDropped(files));
+        }
         match self.wake_at {
             Some(at) if Instant::now() >= at => {
                 self.wake_at = None;

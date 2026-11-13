@@ -97,4 +97,8 @@ pub enum Event {
     /// A system display accessibility option changed, such as macOS's Reduce Transparency (see
     /// [`Cx::reduce_transparency`](crate::Cx::reduce_transparency)); read the options again.
     DisplayOptionsChanged,
+    /// Files were dropped on the window. Several files dropped together arrive as one event.
+    FilesDropped(Vec<std::path::PathBuf>),
+    /// Files are being dragged over the window (`true`), or the drag left or ended (`false`).
+    FilesHovered(bool),
 }
