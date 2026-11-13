@@ -512,6 +512,7 @@ impl Renderer {
     }
 
     /// Bytes of image pixels uploaded to textures by the latest frame (0 when every image was up to date).
+    #[cfg(test)]
     pub(crate) fn image_upload_bytes(&self) -> u64 {
         self.images.uploaded_bytes
     }
