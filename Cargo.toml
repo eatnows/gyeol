@@ -13,6 +13,8 @@ publish = false
 [features]
 # PNG output for headless snapshots (`snapshot::Image::save_png`).
 snapshot = ["dep:png"]
+# SVG icons: `icon(svg)` parses a stroke/fill subset of SVG and rasterizes it crisply at device scale.
+svg = ["dep:svgtypes", "dep:roxmltree", "dep:tiny-skia"]
 
 [dependencies]
 arboard = { version = "3.6.1", default-features = false }
@@ -20,7 +22,10 @@ bytemuck = { version = "1", features = ["derive"] }
 cosmic-text = "0.19"
 png = { version = "0.18", optional = true }
 pollster = "1"
+roxmltree = { version = "0.20", optional = true }
+svgtypes = { version = "0.15", optional = true }
 taffy = { version = "0.14.0", default-features = false, features = ["std", "taffy_tree", "flexbox", "content_size"] }
+tiny-skia = { version = "0.11", default-features = false, features = ["std"], optional = true }
 wgpu = "30"
 winit = "0.30"
 

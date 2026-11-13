@@ -526,6 +526,7 @@ impl Renderer {
                     quads.push(QuadInstance::new(q, &mut extras));
                     (BatchKind::Quads, quads.len() as u32 - 1..quads.len() as u32, q.clip)
                 }
+                Item::Icon(_) => continue, // not drawn yet
                 Item::Text(t) => {
                     next_text += 1;
                     (BatchKind::Glyphs, glyph_ranges[next_text - 1].clone(), t.clip)

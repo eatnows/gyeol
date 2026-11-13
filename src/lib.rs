@@ -9,6 +9,7 @@ mod error;
 #[cfg(target_os = "macos")]
 mod macos;
 pub mod event;
+pub mod icon;
 mod gpu;
 mod layout;
 pub mod list;
@@ -26,6 +27,7 @@ pub use error::{Error, Result};
 pub use event::{Event, Ime, Key, Modifiers, MouseButton, NamedKey, ScrollDelta, SystemTheme};
 pub use renderer::Renderer;
 pub use scene::{BackdropBlur, Capped, Color, Gradient, GradientKind, GradientStop, RadialSize, MAX_GRADIENT_LAYERS, MAX_GRADIENT_STOPS, Path, PathCommand, Quad, Rect, Scene, Shadow, Text, MAX_SHADOWS};
+pub use icon::{FillRule, Icon, IconCommand, IconData, IconFill, IconShape, IconStroke, LineCap, LineJoin};
 pub use list::{list_rows, uniform_list};
 pub use shaper::{Shaper, TextStyle};
 pub use shell::{run, run_with, App, Cx, Platform, WindowOptions};

@@ -469,6 +469,8 @@ pub enum Item {
     Quad(Quad),
     Text(Text),
     Path(Path),
+    /// A vector icon tinted with one color; see [`crate::icon`].
+    Icon(crate::icon::Icon),
 }
 
 /// Everything to draw in one frame, in painting order: later items cover earlier ones.
@@ -491,12 +493,20 @@ impl Scene {
         self.items.push(Item::Path(path));
     }
 
+    pub fn push_icon(&mut self, icon: crate::icon::Icon) {
+        self.items.push(Item::Icon(icon));
+    }
+
     pub fn quads(&self) -> impl Iterator<Item = &Quad> {
         self.items.iter().filter_map(|i| if let Item::Quad(q) = i { Some(q) } else { None })
     }
 
     pub fn texts(&self) -> impl Iterator<Item = &Text> {
         self.items.iter().filter_map(|i| if let Item::Text(t) = i { Some(t) } else { None })
+    }
+
+    pub fn icons(&self) -> impl Iterator<Item = &crate::icon::Icon> {
+        self.items.iter().filter_map(|i| if let Item::Icon(icon) = i { Some(icon) } else { None })
     }
 
     pub fn paths(&self) -> impl Iterator<Item = &Path> {
