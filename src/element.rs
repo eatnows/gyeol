@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 
 use crate::{
     event::{Modifiers, MouseButton},
-    scene::{Color, Path},
+    scene::{Color, Gradient, Path},
     shell::Cx,
 };
 
@@ -115,6 +115,7 @@ pub struct Style {
     pub align_self: Option<Align>,
     pub justify: Option<Justify>,
     pub background: Option<Color>,
+    pub gradient: Option<Gradient>,
     pub border_width: f32,
     pub border_color: Color,
     /// Corner radii: top-left, top-right, bottom-right, bottom-left.
@@ -156,6 +157,7 @@ impl Default for Style {
             align_self: None,
             justify: None,
             background: None,
+            gradient: None,
             border_width: 0.,
             border_color: Color::TRANSPARENT,
             radii: [0.; 4],
@@ -499,6 +501,12 @@ impl<S> Element<S> {
 
     pub fn bg(mut self, color: Color) -> Self {
         self.style.background = Some(color);
+        self
+    }
+
+    /// Fills with a linear gradient (CSS angle in degrees: 0 up, 90 right, 180 down), over `bg`.
+    pub fn bg_gradient(mut self, angle: f32, from: Color, to: Color) -> Self {
+        self.style.gradient = Some(Gradient { from, to, angle });
         self
     }
 

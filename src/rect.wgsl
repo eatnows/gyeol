@@ -12,6 +12,8 @@ struct Instance {
     @location(3) border_color: vec4<f32>,
     @location(4) radii: vec4<f32>, // top-left, top-right, bottom-right, bottom-left
     @location(5) border_width: f32,
+    @location(6) gradient_end: vec4<f32>,
+    @location(7) gradient: vec2<f32>, // enabled, angle in radians
 };
 
 struct VsOut {
@@ -22,6 +24,8 @@ struct VsOut {
     @location(3) border_color: vec4<f32>,
     @location(4) radii: vec4<f32>,
     @location(5) border_width: f32,
+    @location(6) gradient_end: vec4<f32>,
+    @location(7) gradient: vec2<f32>,
 };
 
 @vertex
@@ -40,6 +44,8 @@ fn vs_main(@builtin(vertex_index) index: u32, inst: Instance) -> VsOut {
     out.border_color = inst.border_color;
     out.radii = inst.radii;
     out.border_width = inst.border_width;
+    out.gradient_end = inst.gradient_end;
+    out.gradient = inst.gradient;
     return out;
 }
 
@@ -62,9 +68,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let outer = clamp(0.5 - d, 0.0, 1.0);
     let inner = clamp(0.5 - (d + in.border_width), 0.0, 1.0);
     let ring = outer - inner;
+    // Premultiplied fill color, flat or a CSS-style linear gradient (interpolated premultiplied).
+    var base = vec4<f32>(in.background.rgb * in.background.a, in.background.a);
+    if in.gradient.x > 0.5 {
+        // 0 rad points up, clockwise; the gradient line is as long as the box's projection on it.
+        let dir = vec2<f32>(sin(in.gradient.y), -cos(in.gradient.y));
+        let len = abs(in.size.x * dir.x) + abs(in.size.y * dir.y);
+        let t = clamp(dot(in.local, dir) / max(len, 0.0001) + 0.5, 0.0, 1.0);
+        let end = vec4<f32>(in.gradient_end.rgb * in.gradient_end.a, in.gradient_end.a);
+        base = mix(base, end, t);
+    }
     // Premultiplied output: fill inside the border, border color on the ring.
-    let fill = in.background.rgb * in.background.a * inner;
+    let fill = base.rgb * inner;
     let edge = in.border_color.rgb * in.border_color.a * ring;
-    let alpha = in.background.a * inner + in.border_color.a * ring;
+    let alpha = base.a * inner + in.border_color.a * ring;
     return vec4<f32>(fill + edge, alpha);
 }

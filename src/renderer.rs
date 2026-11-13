@@ -21,6 +21,10 @@ struct QuadInstance {
     border_color: [f32; 4],
     radii: [f32; 4],
     border_width: f32,
+    /// End color of the gradient (its start color is `background`).
+    gradient_end: [f32; 4],
+    /// `[enabled, angle in radians]`.
+    gradient: [f32; 2],
 }
 
 impl From<&Quad> for QuadInstance {
@@ -28,10 +32,12 @@ impl From<&Quad> for QuadInstance {
         QuadInstance {
             pos: [q.bounds.x, q.bounds.y],
             size: [q.bounds.w, q.bounds.h],
-            background: q.background.to_array(),
+            background: q.gradient.map_or(q.background, |g| g.from).to_array(),
             border_color: q.border_color.to_array(),
             radii: q.corner_radii,
             border_width: q.border_width,
+            gradient_end: q.gradient.map_or([0.; 4], |g| g.to.to_array()),
+            gradient: q.gradient.map_or([0.; 2], |g| [1., g.angle.to_radians()]),
         }
     }
 }
@@ -361,7 +367,9 @@ fn create_quad_pipeline(
                 array_stride: std::mem::size_of::<QuadInstance>() as u64,
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &wgpu::vertex_attr_array![
-                    0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32                ],
+                    0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32,
+                    6 => Float32x4, 7 => Float32x2,
+                ],
             })],
         },
         fragment: Some(wgpu::FragmentState {

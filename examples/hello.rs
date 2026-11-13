@@ -12,6 +12,14 @@ impl gyeol::App for Hello {
         scene.push_quad(Quad::new(Rect::new(260., 190., 64., 64.), Color::hex(0x14202b)).rounded(32.));
         scene.push_quad(Quad::new(Rect::new(344., 190., (w - 384.).max(40.), 64.), Color::hex(0x2e7d4e).with_alpha(0.35)).rounded(8.).bordered(2., Color::hex(0x2e7d4e)));
         scene.push_quad(Quad::new(Rect::new(40., h - 90., w - 80., 50.), Color::hex(0x0f1720)).rounded(6.));
+        // A glass-like card: translucent gradient over a colorful backdrop.
+        scene.push_quad(Quad::new(Rect::new(40., 290., 260., 100.), Color::hex(0x7aa7ff)).rounded(20.).gradient(150., Color::hex(0x7aa7ff), Color::hex(0xff9ecb)));
+        scene.push_quad(
+            Quad::new(Rect::new(60., 310., 220., 60.), Color::hex(0xffffff).with_alpha(0.5))
+                .rounded(14.)
+                .gradient(140., Color::hex(0xffffff).with_alpha(0.55), Color::hex(0xffffff).with_alpha(0.15))
+                .bordered(1., Color::hex(0xffffff).with_alpha(0.6)),
+        );
         let ink = Color::hex(0x14202b);
         scene.push_text(Text::new((60., 58.), "gyeol 결", 34., ink));
         scene.push_text(Text::new((60., 108.), "한글 조합, Hello world, fn main() { 0123456789 }", 16., Color::hex(0x4a5866)));

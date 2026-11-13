@@ -5,7 +5,7 @@ use taffy::{prelude::*, tree::LayoutOutput, TaffyTree};
 
 use crate::{
     element::{Align, Cursor, Direction, Element, ElementId, Handler, Justify, Kind, Length, MouseHandler, Overflow, Style},
-    scene::{Color, Path, Quad, Rect, Scene, Text},
+    scene::{Color, Gradient, Path, Quad, Rect, Scene, Text},
     shaper::{Shaper, TextStyle},
 };
 
@@ -39,6 +39,7 @@ pub(crate) struct Node<S> {
     parent: Option<usize>,
     background: Option<Color>,
     hover_background: Option<Color>,
+    gradient: Option<Gradient>,
     border_width: f32,
     border_color: Color,
     radii: [f32; 4],
@@ -265,8 +266,9 @@ pub(crate) fn layout_and_paint<S>(
             scene.push_quad(thumbs.pop().expect("checked").1);
         }
         let fill = if hovered.contains(&i) { node.hover_background.or(node.background) } else { node.background };
-        if fill.is_some() || node.border_width > 0. {
+        if fill.is_some() || node.gradient.is_some() || node.border_width > 0. {
             let mut quad = Quad::new(node.bounds, fill.unwrap_or(Color::TRANSPARENT)).rounded_corners(node.radii).clipped(node.clip);
+            quad.gradient = node.gradient;
             if node.border_width > 0. {
                 quad = quad.bordered(node.border_width, node.border_color);
             }
@@ -318,6 +320,7 @@ fn build<S>(
         parent,
         background: style.background,
         hover_background: style.hover_background,
+        gradient: style.gradient,
         border_width: style.border_width,
         border_color: style.border_color,
         radii: style.radii,
@@ -540,6 +543,14 @@ mod tests {
 
         let (_, away) = layout_and_paint(build(), SIZE, (350., 200.), Color::hex(0xffffff), &mut shaper, &mut ScrollStore::new());
         assert_eq!(away.quads().next().unwrap().background, idle, "no hover when the pointer is elsewhere");
+    }
+
+    #[test]
+    fn a_gradient_background_reaches_the_painted_quad() {
+        let mut shaper = Shaper::new();
+        let (a, b) = (Color::hex(0xffffff), Color::hex(0x000000));
+        let (_, scene) = lay(div().w(50.).h(50.).bg_gradient(140., a, b), &mut shaper);
+        assert_eq!(scene.quads().next().unwrap().gradient, Some(Gradient { from: a, to: b, angle: 140. }));
     }
 
     fn list(rows: usize) -> Element<()> {

@@ -63,11 +63,22 @@ impl Rect {
     }
 }
 
+/// A two-stop linear gradient. `angle` is in degrees, CSS-style: 0 points up, 90 points right,
+/// 180 points down, and the color runs `from` -> `to` along that direction.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Gradient {
+    pub from: Color,
+    pub to: Color,
+    pub angle: f32,
+}
+
 /// A filled rectangle with optional rounded corners and border.
 #[derive(Clone, Copy, Debug)]
 pub struct Quad {
     pub bounds: Rect,
+    /// Fill color; replaced by `gradient` when that is set.
     pub background: Color,
+    pub gradient: Option<Gradient>,
     pub border_color: Color,
     pub border_width: f32,
     /// Corner radii: top-left, top-right, bottom-right, bottom-left.
@@ -78,7 +89,7 @@ pub struct Quad {
 
 impl Quad {
     pub fn new(bounds: Rect, background: Color) -> Quad {
-        Quad { bounds, background, border_color: Color::TRANSPARENT, border_width: 0., corner_radii: [0.; 4], clip: None }
+        Quad { bounds, background, gradient: None, border_color: Color::TRANSPARENT, border_width: 0., corner_radii: [0.; 4], clip: None }
     }
 
     pub fn rounded(mut self, radius: f32) -> Quad {
@@ -99,6 +110,12 @@ impl Quad {
 
     pub fn clipped(mut self, clip: Option<Rect>) -> Quad {
         self.clip = clip;
+        self
+    }
+
+    /// Fills with a linear gradient instead of the flat background.
+    pub fn gradient(mut self, angle: f32, from: Color, to: Color) -> Quad {
+        self.gradient = Some(Gradient { from, to, angle });
         self
     }
 }
@@ -234,6 +251,14 @@ impl Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_quad_gradient_is_recorded_and_defaults_to_none() {
+        let (a, b) = (Color::hex(0xff0000), Color::hex(0x0000ff));
+        let quad = Quad::new(Rect::new(0., 0., 10., 10.), a);
+        assert_eq!(quad.gradient, None);
+        assert_eq!(quad.gradient(150., a, b).gradient, Some(Gradient { from: a, to: b, angle: 150. }));
+    }
 
     #[test]
     fn a_path_keeps_its_commands_and_can_be_translated() {
