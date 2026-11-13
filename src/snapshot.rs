@@ -36,11 +36,14 @@ pub enum Background {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Options {
     pub background: Background,
+    /// Where the pointer is for [`view_with`], in logical pixels: elements under it are hovered, so
+    /// hover styles show. `None` leaves the pointer at the window's top-left corner like a fresh window.
+    pub pointer: Option<(f32, f32)>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { background: Background::Checkerboard }
+        Options { background: Background::Checkerboard, pointer: None }
     }
 }
 
@@ -80,6 +83,9 @@ pub fn view<S: View>(state: S, size: (f32, f32), scale: f32) -> Result<Image> {
 
 pub fn view_with<S: View>(state: S, size: (f32, f32), scale: f32, options: &Options) -> Result<Image> {
     let mut host = TestHost::with_scale(state, size, scale);
+    if let Some(pointer) = options.pointer {
+        host.mouse_move(pointer);
+    }
     let mut renderer = Renderer::offscreen(size, scale)?;
     let premultiplied = host.render(&mut renderer);
     Ok(finish(premultiplied, &renderer, options))
@@ -133,7 +139,7 @@ mod tests {
 
     /// The image, or `None` (with a note) on a machine with no GPU adapter.
     fn render(scene: &Scene, size: (f32, f32), scale: f32, background: Background) -> Option<Image> {
-        match scene_with(scene, size, scale, &Options { background }) {
+        match scene_with(scene, size, scale, &Options { background, ..Options::default() }) {
             Ok(image) => Some(image),
             Err(e) => {
                 eprintln!("skipping, no GPU to render with: {e}");
