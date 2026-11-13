@@ -127,6 +127,9 @@ impl<S: View> Host<S> {
                 }
             }
             Event::MousePressed { button, pos, click_count } => {
+                for handler in laid.outside_handlers(pos) {
+                    handler(&mut self.state, cx);
+                }
                 if button == MouseButton::Left {
                     self.pressed = laid.click_target(pos);
                 }

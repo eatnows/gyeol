@@ -625,4 +625,49 @@ mod tests {
         assert_eq!(CursorIcon::from(Cursor::Grabbing), CursorIcon::Grabbing);
         assert_eq!(CursorIcon::from(Cursor::NotAllowed), CursorIcon::NotAllowed);
     }
+
+    struct Menu {
+        outside: u32,
+        inside_clicks: u32,
+        opened: bool,
+    }
+
+    impl View for Menu {
+        fn view(&self, _: &mut Cx) -> Element<Self> {
+            // A 100x40 panel (at 20,20) with a descendant sticking out below it, a banner overlay that
+            // covers part of the panel, and a bystander.
+            let panel = div()
+                .id("panel")
+                .absolute()
+                .left(20.)
+                .top(20.)
+                .w(100.)
+                .h(40.)
+                .bg(IDLE)
+                .on_mouse_down_outside(|s: &mut Menu, _| s.outside += 1)
+                .on_click(|s: &mut Menu, _| s.inside_clicks += 1)
+                .child(div().absolute().left(10.).top(30.).w(30.).h(40.).bg(HOT).on_click(|s: &mut Menu, _| s.inside_clicks += 10));
+            let banner = div().overlay().left(100.).top(20.).w(60.).h(40.).bg(HOT).on_click(|_, _| {});
+            div().child(panel).child(if self.opened { banner } else { div() }).child(div().absolute().left(200.).top(100.).w(50.).h(50.).bg(IDLE))
+        }
+    }
+
+    #[test]
+    fn an_outside_press_fires_only_outside_the_element_its_descendants_and_not_under_an_overlay() {
+        let mut host = TestHost::new(Menu { outside: 0, inside_clicks: 0, opened: false }, (400., 300.));
+        host.mouse_down((50., 40.)); // inside the panel
+        host.mouse_down((40., 80.)); // on the descendant, below the panel's box
+        assert_eq!(host.state().outside, 0, "presses on the element and on its descendants are not outside");
+        host.mouse_down((300., 200.)); // far away
+        host.mouse_down((110., 40.)); // inside the panel's box (20..120), no overlay yet
+        assert_eq!(host.state().outside, 1);
+        host.state_mut().opened = true;
+        host.frame();
+        host.mouse_down((110., 40.)); // still inside the panel's box, but the banner overlay (100..160) covers it
+        assert_eq!(host.state().outside, 2, "a press that lands on an overlay above counts as outside");
+        host.mouse_down((60., 40.)); // inside the panel, away from the banner
+        assert_eq!(host.state().outside, 2);
+        host.click((110., 40.));
+        assert_eq!(host.state().inside_clicks, 0, "and the overlay blocked the click on the panel under it");
+    }
 }

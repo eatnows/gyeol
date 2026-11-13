@@ -59,6 +59,8 @@ pub(crate) struct Node<S> {
     on_mouse_down: Option<MouseHandler<S>>,
     on_drag: Option<MouseHandler<S>>,
     on_mouse_up: Option<MouseHandler<S>>,
+    on_mouse_down_outside: Option<Handler<S>>,
+    overlay: bool,
     taffy_id: NodeId,
     // ---- overflow and scrolling
     id: Option<ElementId>,
@@ -97,12 +99,18 @@ pub(crate) enum Capture {
 /// against what the user actually sees.
 pub(crate) struct Laid<S> {
     nodes: Vec<Node<S>>,
+    /// Node indices from the back to the front of the window: normal elements in tree order, then each
+    /// overlay's subtree (overlays in tree order). Painting walks it forwards, hit-testing backwards.
+    order: Vec<usize>,
 }
 
 impl<S> Laid<S> {
     /// The frontmost visible element under `pos` (content cut off by a scroll container does not count).
     fn topmost_at(&self, pos: (f32, f32)) -> Option<usize> {
-        self.nodes.iter().rposition(|n| n.bounds.contains(pos) && n.clip.is_none_or(|c| c.contains(pos)))
+        self.order.iter().rev().copied().find(|&i| {
+            let n = &self.nodes[i];
+            n.bounds.contains(pos) && n.clip.is_none_or(|c| c.contains(pos))
+        })
     }
 
     /// `index` and all its ancestors.
@@ -158,6 +166,12 @@ impl<S> Laid<S> {
 
     pub fn bounds_of(&self, index: usize) -> Rect {
         self.nodes[index].bounds
+    }
+
+    /// The handlers of the elements a press at `pos` is outside of: not on them or their descendants.
+    pub fn outside_handlers(&self, pos: (f32, f32)) -> Vec<&Handler<S>> {
+        let hit: Vec<usize> = self.chain(self.topmost_at(pos)).collect();
+        self.nodes.iter().enumerate().filter(|(i, _)| !hit.contains(i)).filter_map(|(_, n)| n.on_mouse_down_outside.as_ref()).collect()
     }
 
     /// The cursor to show at `pos`: that of the innermost element that asks for one.
@@ -233,6 +247,8 @@ pub(crate) fn layout_and_paint<S>(
     for i in 0..nodes.len() {
         let layout = tree.layout(nodes[i].taffy_id).expect("node exists");
         let (origin, parent_clip) = nodes[i].parent.map_or(((0., 0.), None), |p| (nodes[p].content_origin, nodes[p].child_clip));
+        // An overlay floats above its ancestors' clips.
+        let parent_clip = if nodes[i].overlay { None } else { parent_clip };
         let bounds = Rect::new(origin.0 + layout.location.x, origin.1 + layout.location.y, layout.size.width, layout.size.height);
 
         let (scroll_x, scroll_y) = nodes[i].scrolls();
@@ -266,7 +282,15 @@ pub(crate) fn layout_and_paint<S>(
         }
     }
 
-    let laid = Laid { nodes };
+    // The layer each node paints in: 0 for normal elements, otherwise the index of its innermost overlay
+    // ancestor-or-self. Sorting by it (stably) keeps tree order within a layer and puts overlays last.
+    let mut layer = vec![0usize; nodes.len()];
+    for i in 0..nodes.len() {
+        layer[i] = if nodes[i].overlay { i } else { nodes[i].parent.map_or(0, |p| layer[p]) };
+    }
+    let mut order: Vec<usize> = (0..nodes.len()).collect();
+    order.sort_by_key(|&i| layer[i]);
+    let laid = Laid { nodes, order };
     let hovered: Vec<usize> = laid.chain(laid.topmost_at(mouse)).collect();
     // The text color of node `i`: the nearest hovered ancestor-or-self that overrides it on hover, unless
     // an element between them sets its own color; otherwise the color it inherited when built.
@@ -289,7 +313,16 @@ pub(crate) fn layout_and_paint<S>(
     }
     let mut scene = Scene { background: Some(background), ..Default::default() };
     let mut thumbs: Vec<(usize, Quad)> = Vec::new();
-    for (i, node) in laid.nodes.iter().enumerate() {
+    let mut current_layer = 0;
+    for &i in &laid.order {
+        let node = &laid.nodes[i];
+        if layer[i] != current_layer {
+            // Moving on to an overlay: finish the scroll thumbs of the layer below it.
+            while let Some((_, thumb)) = thumbs.pop() {
+                scene.push_quad(thumb);
+            }
+            current_layer = layer[i];
+        }
         while thumbs.last().is_some_and(|(at, _)| *at <= i) {
             scene.push_quad(thumbs.pop().expect("checked").1);
         }
@@ -356,7 +389,7 @@ fn build<S>(
     tree: &mut TaffyTree<TextLeaf>,
     nodes: &mut Vec<Node<S>>,
 ) -> NodeId {
-    let Element { id, style, kind, on_click, on_mouse_down, on_drag, on_mouse_up } = el;
+    let Element { id, style, kind, on_click, on_mouse_down, on_drag, on_mouse_up, on_mouse_down_outside } = el;
     let mut text_style = inherited.style;
     text_style.size = style.text_size.unwrap_or(text_style.size);
     text_style.family = style.text_family.or(text_style.family);
@@ -391,6 +424,8 @@ fn build<S>(
         on_mouse_down,
         on_drag,
         on_mouse_up,
+        on_mouse_down_outside,
+        overlay: style.overlay,
         taffy_id: NodeId::new(0),
         id,
         overflow: (style.overflow_x, style.overflow_y),
@@ -452,7 +487,7 @@ fn to_taffy(s: &Style) -> taffy::Style {
         Direction::Row => FlexDirection::Row,
         Direction::Column => FlexDirection::Column,
     };
-    if s.absolute {
+    if s.absolute || s.overlay {
         t.position = Position::Absolute;
     }
     let inset = |v: Option<f32>| v.map_or(LengthPercentageAuto::auto(), LengthPercentageAuto::length);
@@ -873,6 +908,71 @@ mod tests {
         assert_eq!(second.0, 60.);
         assert!((second.2 - 340. / 3.).abs() <= 1. && (third.2 - 680. / 3.).abs() <= 1., "{second:?} {third:?}");
         assert!((third.0 - (60. + second.2)).abs() <= 1.);
+    }
+
+    /// A 100x50 clipped container holding a quad and a menu overlay that sticks out of it, followed by
+    /// a sibling that is painted later in the tree.
+    fn with_menu() -> Element<()> {
+        div()
+            .col()
+            .child(
+                div()
+                    .w(100.)
+                    .h(50.)
+                    .overflow_hidden()
+                    .child(div().w(100.).h(50.).bg(Color::hex(0x111111)))
+                    .child(div().overlay().left(60.).top(30.).w(100.).h(80.).bg(Color::hex(0xff0000)).on_click(|_, _| {}).child(div().w(20.).h(20.).bg(Color::hex(0x00ff00)))),
+            )
+            .child(div().w(200.).h(200.).bg(Color::hex(0x2222ff)).hover_bg(Color::hex(0x8888ff)).on_click(|_, _| {}))
+    }
+
+    #[test]
+    fn an_overlay_paints_last_is_positioned_like_an_absolute_element_and_is_not_clipped() {
+        let mut shaper = Shaper::new();
+        let (laid, scene) = lay(with_menu(), &mut shaper);
+        let colors: Vec<Color> = scene.quads().map(|q| q.background).collect();
+        let hex = Color::hex;
+        assert_eq!(colors, vec![hex(0x111111), hex(0x2222ff), hex(0xff0000), hex(0x00ff00)], "the overlay and its child come after the later sibling");
+        let quads: Vec<&Quad> = scene.quads().collect();
+        assert_eq!(quads[0].clip, Some(Rect::new(0., 0., 100., 50.)), "normal children are cut off at the container");
+        assert_eq!(quads[2].clip, None, "an overlay ignores its ancestors' clips");
+        assert_eq!(quads[3].clip, None, "and so do its descendants");
+        assert_eq!(quads[2].bounds, Rect::new(60., 30., 100., 80.), "left/top relative to the parent, extending past it");
+        assert_eq!(b(&laid, 5), (0., 50., 200., 200.), "the overlay takes no room in the flow: the sibling sits right below the container");
+    }
+
+    #[test]
+    fn an_overlay_gets_hit_testing_priority_and_blocks_hover_and_clicks_underneath() {
+        let mut shaper = Shaper::new();
+        let paint = |mouse| layout_and_paint(with_menu(), SIZE, mouse, Color::hex(0xffffff), &mut Shaper::new(), &mut ScrollStore::new());
+        let _ = &mut shaper;
+        // (80, 70) is outside the 100x50 container, over the sibling, and inside the overlay.
+        let (laid, scene) = paint((80., 70.));
+        let overlay = laid.click_target((80., 70.)).expect("something is clickable there");
+        assert_eq!(laid.bounds_of(overlay), Rect::new(60., 30., 100., 80.), "the overlay, not the sibling below it");
+        let sibling = scene.quads().find(|q| q.bounds.w == 200.).unwrap();
+        assert_eq!(sibling.background, Color::hex(0x2222ff), "the covered sibling is not hovered");
+        // Where the overlay does not reach, the sibling is clickable and hovers as usual.
+        let (laid, scene) = paint((10., 120.));
+        assert_eq!(laid.bounds_of(laid.click_target((10., 120.)).unwrap()), Rect::new(0., 50., 200., 200.));
+        assert_eq!(scene.quads().find(|q| q.bounds.w == 200.).unwrap().background, Color::hex(0x8888ff));
+    }
+
+    #[test]
+    fn later_overlays_are_above_earlier_ones_and_nested_overlays_above_their_parent() {
+        let mut shaper = Shaper::new();
+        let tile = |c: u32| div().overlay().left(0.).top(0.).w(50.).h(50.).bg(Color::hex(c)).on_click(|_, _| {});
+        let root = div()
+            .child(tile(0xaa0000))
+            .child(div().w(10.).h(10.).bg(Color::hex(0x00aa00)))
+            .child(tile(0x0000aa).child(div().w(30.).h(30.).bg(Color::hex(0x00aaaa)).child(tile(0xaaaa00))));
+        let (laid, scene) = lay(root, &mut shaper);
+        let colors: Vec<Color> = scene.quads().map(|q| q.background).collect();
+        let hex = Color::hex;
+        assert_eq!(colors, vec![hex(0x00aa00), hex(0xaa0000), hex(0x0000aa), hex(0x00aaaa), hex(0xaaaa00)]);
+        let top = laid.click_target((5., 5.)).unwrap();
+        assert_eq!(laid.bounds_of(top), Rect::new(0., 0., 50., 50.));
+        assert_eq!(laid.bounds_of(top), laid.bounds_of(laid.click_target((5., 5.)).unwrap()));
     }
 
     fn list(rows: usize) -> Element<()> {

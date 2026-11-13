@@ -107,6 +107,8 @@ pub struct Style {
     pub wrap: bool,
     /// Taken out of the flow and placed by [`Style::inset`] relative to its parent.
     pub absolute: bool,
+    /// Painted above everything else and not clipped by ancestors; see [`Element::overlay`].
+    pub overlay: bool,
     /// Distances from the parent's edges when `absolute`: top, right, bottom, left.
     pub inset: [Option<f32>; 4],
     pub gap: f32,
@@ -161,6 +163,7 @@ impl Default for Style {
             direction: Direction::Column,
             wrap: false,
             absolute: false,
+            overlay: false,
             inset: [None; 4],
             gap: 0.,
             padding: [0.; 4],
@@ -297,16 +300,17 @@ pub struct Element<S> {
     pub(crate) on_mouse_down: Option<MouseHandler<S>>,
     pub(crate) on_drag: Option<MouseHandler<S>>,
     pub(crate) on_mouse_up: Option<MouseHandler<S>>,
+    pub(crate) on_mouse_down_outside: Option<Handler<S>>,
 }
 
 /// A container. Children stack vertically; call [`Element::row`] for a horizontal row.
 pub fn div<S>() -> Element<S> {
-    Element { id: None, style: Style::default(), kind: Kind::Div(Vec::new()), on_click: None, on_mouse_down: None, on_drag: None, on_mouse_up: None }
+    Element { id: None, style: Style::default(), kind: Kind::Div(Vec::new()), on_click: None, on_mouse_down: None, on_drag: None, on_mouse_up: None, on_mouse_down_outside: None }
 }
 
 /// A single line of text, in the size and color inherited from its parents.
 pub fn text<S>(content: impl Into<String>) -> Element<S> {
-    Element { id: None, style: Style::default(), kind: Kind::Text(content.into()), on_click: None, on_mouse_down: None, on_drag: None, on_mouse_up: None }
+    Element { id: None, style: Style::default(), kind: Kind::Text(content.into()), on_click: None, on_mouse_down: None, on_drag: None, on_mouse_up: None, on_mouse_down_outside: None }
 }
 
 /// A layout element that paints stroked paths in its own local coordinate system.
@@ -314,7 +318,7 @@ pub fn text<S>(content: impl Into<String>) -> Element<S> {
 /// Paths are moved to the element's top-left after layout, so they naturally participate in
 /// absolute positioning, scrolling and clipping like any other element.
 pub fn paths<S>(items: Vec<Path>) -> Element<S> {
-    Element { id: None, style: Style::default(), kind: Kind::Paths(items), on_click: None, on_mouse_down: None, on_drag: None, on_mouse_up: None }
+    Element { id: None, style: Style::default(), kind: Kind::Paths(items), on_click: None, on_mouse_down: None, on_drag: None, on_mouse_up: None, on_mouse_down_outside: None }
 }
 
 /// A vector icon, drawn crisply at any size and device scale in the text color it inherits (SVG
@@ -335,7 +339,7 @@ pub fn icon_from<S>(data: std::sync::Arc<IconData>) -> Element<S> {
     let mut style = Style::default();
     style.width = Length::Px(data.view_box.w);
     style.height = Length::Px(data.view_box.h);
-    Element { id: None, style, kind: Kind::Icon(data), on_click: None, on_mouse_down: None, on_drag: None, on_mouse_up: None }
+    Element { id: None, style, kind: Kind::Icon(data), on_click: None, on_mouse_down: None, on_drag: None, on_mouse_up: None, on_mouse_down_outside: None }
 }
 
 impl<S> Element<S> {
@@ -384,6 +388,16 @@ impl<S> Element<S> {
     }
 
     /// Called when the button of a press that started on this element is released.
+    /// Runs when the mouse is pressed anywhere but on this element or one of its descendants, so a menu
+    /// or popover can close itself. "On" means what the pointer would hit: a press inside this element's
+    /// box that lands on an [`Element::overlay`] above it (which is not its descendant) counts as outside,
+    /// and a press on a descendant that sticks out of the box does not. Fires for every mouse button, before
+    /// the press is delivered to the element that was hit.
+    pub fn on_mouse_down_outside(mut self, handler: impl Fn(&mut S, &mut Cx) + 'static) -> Self {
+        self.on_mouse_down_outside = Some(Box::new(handler));
+        self
+    }
+
     pub fn on_mouse_up(mut self, handler: impl Fn(&mut S, &mut Cx, MouseEvent) + 'static) -> Self {
         self.on_mouse_up = Some(Box::new(handler));
         self
@@ -396,6 +410,25 @@ impl<S> Element<S> {
     /// the siblings that come before it.
     pub fn absolute(mut self) -> Self {
         self.style.absolute = true;
+        self
+    }
+
+    /// Makes this element a layer that floats over the whole window, for dropdown menus, popovers and
+    /// tooltips:
+    ///
+    /// - it is positioned like an [`Element::absolute`] element, relative to its parent's box
+    ///   (`.top()`, `.left()`, ... place it), and takes no room in the layout;
+    /// - it and its subtree paint above everything that is not an overlay, wherever it sits in the tree,
+    ///   and are **not** clipped by `overflow_hidden` or scrolling ancestors;
+    /// - it gets pointer events before the elements underneath: they are neither hovered nor clicked
+    ///   where the overlay covers them (even where it is transparent);
+    /// - of several overlays, the one later in the tree is above the earlier ones, and an overlay inside
+    ///   another is above it.
+    ///
+    /// Events still bubble to the overlay's ancestors in the tree, so a button that contains its own menu
+    /// stays hovered while the menu is. Pair with [`Element::on_mouse_down_outside`] to close it.
+    pub fn overlay(mut self) -> Self {
+        self.style.overlay = true;
         self
     }
 
