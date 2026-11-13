@@ -38,3 +38,7 @@ objc2-foundation = { version = "0.2", features = ["NSGeometry"] }
 [[example]]
 name = "snapshot"
 required-features = ["snapshot"]
+
+[[example]]
+name = "icons"
+required-features = ["svg"]
