@@ -179,9 +179,9 @@ impl<S> Laid<S> {
         self.chain(self.topmost_at(pos)).map(|i| self.nodes[i].cursor).find(|c| *c != Cursor::Default).unwrap_or_default()
     }
 
-    /// The viewport size of every scroll container in this frame.
-    pub fn viewports(&self) -> impl Iterator<Item = (ElementId, (f32, f32))> + '_ {
-        self.nodes.iter().filter_map(|n| n.id.filter(|_| n.scrolls() != (false, false)).map(|id| (id, (n.bounds.w, n.bounds.h))))
+    /// The viewport (position and size) of every scroll container in this frame.
+    pub fn viewports(&self) -> impl Iterator<Item = (ElementId, Rect)> + '_ {
+        self.nodes.iter().filter_map(|n| n.id.filter(|_| n.scrolls() != (false, false)).map(|id| (id, n.bounds)))
     }
 
     /// The viewport size and furthest scroll offsets of the container `id` in this frame.

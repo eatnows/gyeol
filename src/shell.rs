@@ -136,6 +136,11 @@ impl<'a> Cx<'a> {
         self.scroll_info.get(&crate::element::ElementId::new(id)).map(|i| i.viewport)
     }
 
+    /// Where the scroll container `id` was in the window in the latest frame (position and size).
+    pub fn bounds(&self, id: impl std::hash::Hash) -> Option<Rect> {
+        self.scroll_info.get(&crate::element::ElementId::new(id)).map(|i| Rect::new(i.origin.0, i.origin.1, i.viewport.0, i.viewport.1))
+    }
+
     /// Scrolls the container `id` just enough that `region` (in the container's unscrolled content
     /// coordinates) is visible. Takes effect for the next frame.
     pub fn scroll_to_reveal(&mut self, id: impl std::hash::Hash, region: Rect) {

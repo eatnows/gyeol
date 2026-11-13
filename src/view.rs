@@ -54,7 +54,7 @@ impl<S: View> Host<S> {
     fn scroll_snapshot(&self) -> std::collections::HashMap<crate::element::ElementId, ScrollInfo> {
         let Some(laid) = &self.laid else { return Default::default() };
         laid.viewports()
-            .map(|(id, viewport)| (id, ScrollInfo { offset: self.scroll.get(&id).copied().unwrap_or_default(), viewport }))
+            .map(|(id, viewport)| (id, ScrollInfo { offset: self.scroll.get(&id).copied().unwrap_or_default(), viewport: (viewport.w, viewport.h), origin: (viewport.x, viewport.y) }))
             .collect()
     }
 
@@ -70,7 +70,10 @@ impl<S: View> Host<S> {
             let entry = self.scroll.entry(id).or_insert((0., 0.));
             let reveal = |offset: f32, start: f32, len: f32, view: f32, max: f32| {
                 let target = if start < offset { start } else if start + len > offset + view { start + len - view } else { offset };
-                target.clamp(0., max)
+                // Not clamped to the old layout's end: content that grew this event (typing at the end of
+                // a text field) is not laid out yet, and layout clamps the offset again anyway.
+                let _ = max;
+                target.max(0.)
             };
             entry.0 = reveal(entry.0, region.x, region.w, viewport.0, max.0);
             entry.1 = reveal(entry.1, region.y, region.h, viewport.1, max.1);

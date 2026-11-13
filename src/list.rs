@@ -14,6 +14,8 @@ const OVERSCAN: usize = 2;
 pub(crate) struct ScrollInfo {
     pub offset: (f32, f32),
     pub viewport: (f32, f32),
+    /// The container's top-left in the window.
+    pub origin: (f32, f32),
 }
 
 impl Cx<'_> {
