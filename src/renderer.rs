@@ -346,6 +346,15 @@ impl Renderer {
         }
     }
 
+    pub(crate) fn scale_factor(&self) -> f32 {
+        self.scale_factor
+    }
+
+    /// The target size in device pixels.
+    pub(crate) fn size_in_pixels(&self) -> (u32, u32) {
+        (self.config.width, self.config.height)
+    }
+
     /// The drawable area in logical pixels.
     pub fn logical_size(&self) -> (f32, f32) {
         (self.config.width as f32 / self.scale_factor, self.config.height as f32 / self.scale_factor)

@@ -16,6 +16,7 @@ pub mod renderer;
 pub mod scene;
 pub mod shaper;
 pub mod shell;
+pub mod snapshot;
 pub mod testing;
 mod text;
 pub mod view;

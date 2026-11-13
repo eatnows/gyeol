@@ -55,6 +55,7 @@ pub struct TestHost<S: View> {
     shaper: Shaper,
     platform: Recorder,
     size: (f32, f32),
+    scale: f32,
     modifiers: Modifiers,
     wake_at: Option<Instant>,
     scene: Scene,
@@ -64,11 +65,18 @@ pub struct TestHost<S: View> {
 impl<S: View> TestHost<S> {
     /// Starts `state` in a window of `size` logical pixels and paints the first frame.
     pub fn new(state: S, size: (f32, f32)) -> Self {
+        Self::with_scale(state, size, 1.)
+    }
+
+    /// Like [`TestHost::new`], on a display with `scale` device pixels per logical pixel (what the app
+    /// sees as `cx.scale_factor()`; sizes and the scene stay in logical pixels).
+    pub fn with_scale(state: S, size: (f32, f32), scale: f32) -> Self {
         let mut host = TestHost {
             host: Host::new(state),
             shaper: Shaper::new(),
             platform: Recorder::default(),
             size,
+            scale,
             modifiers: Modifiers::default(),
             wake_at: None,
             scene: Scene::default(),
@@ -137,15 +145,23 @@ impl<S: View> TestHost<S> {
     /// Paints a frame, as the shell does when the window asks for a redraw.
     pub fn frame(&mut self) -> &Scene {
         self.shaper.begin_frame();
-        let mut cx = Cx::new(&mut self.shaper, self.modifiers, self.size, 1., &self.platform, &mut self.wake_at);
+        let mut cx = Cx::new(&mut self.shaper, self.modifiers, self.size, self.scale, &self.platform, &mut self.wake_at);
         self.scene = self.host.scene(&mut cx);
         self.shaper.end_frame();
         &self.scene
     }
 
+    /// Draws the latest scene with `renderer`, using this host's fonts so text looks as it was measured.
+    pub(crate) fn render(&mut self, renderer: &mut crate::Renderer) -> Vec<u8> {
+        self.shaper.begin_frame();
+        let pixels = renderer.render_to_image(&self.scene, &mut self.shaper);
+        self.shaper.end_frame();
+        pixels
+    }
+
     /// Delivers `event`, then paints a frame (the shell redraws after every event too).
     pub fn event(&mut self, event: Event) -> &Scene {
-        let mut cx = Cx::new(&mut self.shaper, self.modifiers, self.size, 1., &self.platform, &mut self.wake_at);
+        let mut cx = Cx::new(&mut self.shaper, self.modifiers, self.size, self.scale, &self.platform, &mut self.wake_at);
         self.host.event(event, &mut cx);
         self.frame()
     }

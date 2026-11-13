@@ -10,10 +10,15 @@ keywords = ["gui", "ui", "wgpu", "text"]
 categories = ["gui"]
 publish = false
 
+[features]
+# PNG output for headless snapshots (`snapshot::Image::save_png`).
+snapshot = ["dep:png"]
+
 [dependencies]
 arboard = { version = "3.6.1", default-features = false }
 bytemuck = { version = "1", features = ["derive"] }
 cosmic-text = "0.19"
+png = { version = "0.18", optional = true }
 pollster = "1"
 taffy = { version = "0.14.0", default-features = false, features = ["std", "taffy_tree", "flexbox", "content_size"] }
 wgpu = "30"
