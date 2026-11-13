@@ -29,15 +29,33 @@ fn path_of(url: &NSURL) -> Option<PathBuf> {
     unsafe { url.path() }.map(|p| PathBuf::from(p.to_string()))
 }
 
+/// What the open panel lets the user choose.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Pick {
+    File,
+    Folder,
+    /// A file or a folder.
+    Either,
+}
+
 /// Shows the open panel and returns the chosen file; `None` when cancelled or off the main thread.
 pub fn pick_file(filters: &[(&str, &[&str])]) -> Option<PathBuf> {
+    pick(Pick::File, filters)
+}
+
+/// Shows the open panel for `what`; `None` when cancelled or off the main thread.
+pub fn pick(what: Pick, filters: &[(&str, &[&str])]) -> Option<PathBuf> {
     let mtm = MainThreadMarker::new()?;
     // SAFETY: AppKit calls on the main thread with a panel we own.
     unsafe {
         let panel = NSOpenPanel::openPanel(mtm);
-        panel.setCanChooseDirectories(false);
+        panel.setCanChooseFiles(what != Pick::Folder);
+        panel.setCanChooseDirectories(what != Pick::File);
+        panel.setCanCreateDirectories(what != Pick::File);
         panel.setAllowsMultipleSelection(false);
-        restrict(&panel, filters);
+        if what != Pick::Folder {
+            restrict(&panel, filters);
+        }
         if panel.runModal() != NSModalResponseOK {
             return None;
         }

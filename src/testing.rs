@@ -58,6 +58,16 @@ impl Platform for Recorder {
         self.next_pick.borrow_mut().take()
     }
 
+    fn pick_path(&self, filters: &[(&str, &[&str])]) -> Option<PathBuf> {
+        self.picks.borrow_mut().push(format!("path {}", describe(filters)));
+        self.next_pick.borrow_mut().take()
+    }
+
+    fn pick_folder(&self) -> Option<PathBuf> {
+        self.picks.borrow_mut().push("folder".to_string());
+        self.next_pick.borrow_mut().take()
+    }
+
     fn pick_save_path(&self, default_name: &str, filters: &[(&str, &[&str])]) -> Option<PathBuf> {
         self.picks.borrow_mut().push(format!("save {default_name} {}", describe(filters)));
         self.next_pick.borrow_mut().take()
@@ -183,13 +193,13 @@ impl<S: View> TestHost<S> {
         self.event(Event::FilesHovered(over))
     }
 
-    /// What the next `Cx::pick_file` / `Cx::pick_save_path` returns (once; afterwards `None`, as if
+    /// What the next `Cx::pick_file` / `pick_path` / `pick_folder` / `pick_save_path` returns (once; afterwards `None`, as if
     /// cancelled). `None` here means the user cancels.
     pub fn set_next_pick(&mut self, path: Option<PathBuf>) {
         *self.platform.next_pick.borrow_mut() = path;
     }
 
-    /// The dialogs the app opened so far, as `"open Images:png,jpg"` / `"save name.png Images:png"`.
+    /// The dialogs the app opened so far, as `"open Images:png,jpg"`, `"path ..."`, `"folder"` / `"save name.png Images:png"`.
     pub fn picks(&self) -> Vec<String> {
         self.platform.picks.borrow().clone()
     }

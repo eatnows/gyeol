@@ -38,6 +38,14 @@ pub trait Platform {
     fn pick_file(&self, _filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
         None
     }
+    /// Shows a modal dialog for a file or a folder; `None` when cancelled or not implemented.
+    fn pick_path(&self, _filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
+        None
+    }
+    /// Shows a modal "choose folder" dialog; `None` when cancelled or not implemented.
+    fn pick_folder(&self) -> Option<std::path::PathBuf> {
+        None
+    }
     /// Shows a modal "save" dialog; `None` when cancelled or not implemented on this platform.
     fn pick_save_path(&self, _default_name: &str, _filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
         None
@@ -88,6 +96,23 @@ impl Platform for WindowPlatform<'_> {
             let _ = filters;
             None
         }
+    }
+
+    fn pick_path(&self, filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
+        #[cfg(target_os = "macos")]
+        return crate::macos::dialog::pick(crate::macos::dialog::Pick::Either, filters);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = filters;
+            None
+        }
+    }
+
+    fn pick_folder(&self) -> Option<std::path::PathBuf> {
+        #[cfg(target_os = "macos")]
+        return crate::macos::dialog::pick(crate::macos::dialog::Pick::Folder, &[]);
+        #[cfg(not(target_os = "macos"))]
+        None
     }
 
     fn pick_save_path(&self, default_name: &str, filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
@@ -244,6 +269,20 @@ impl<'a> Cx<'a> {
     /// other platforms this is **not implemented** and always returns `None`.
     pub fn pick_file(&self, filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
         self.platform.pick_file(filters)
+    }
+
+    /// Like [`Cx::pick_file`], but the user may choose a file matching `filters` **or a folder**
+    /// (and create one in the dialog). Folders are not filtered. macOS only (NSOpenPanel); **not
+    /// implemented** elsewhere, where it returns `None`.
+    pub fn pick_path(&self, filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
+        self.platform.pick_path(filters)
+    }
+
+    /// Shows the system's modal "choose folder" dialog (files cannot be chosen; new folders can be
+    /// created) and returns the folder, or `None` if cancelled. macOS only; **not implemented**
+    /// elsewhere, where it returns `None`.
+    pub fn pick_folder(&self) -> Option<std::path::PathBuf> {
+        self.platform.pick_folder()
     }
 
     /// Shows the system's modal "save" dialog pre-filled with `default_name` and returns the chosen
