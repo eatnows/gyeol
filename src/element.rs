@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 
 use crate::{
     event::{Modifiers, MouseButton},
-    scene::{BackdropBlur, Color, Gradient, Path, Shadow},
+    scene::{BackdropBlur, Capped, Color, Gradient, Path, Shadow, MAX_GRADIENT_LAYERS},
     shell::Cx,
 };
 
@@ -115,7 +115,8 @@ pub struct Style {
     pub align_self: Option<Align>,
     pub justify: Option<Justify>,
     pub background: Option<Color>,
-    pub gradient: Option<Gradient>,
+    /// Gradient layers over `background`, bottom first.
+    pub gradients: Capped<Gradient, MAX_GRADIENT_LAYERS>,
     pub shadow: Option<Shadow>,
     pub inset_shadow: Option<Shadow>,
     pub backdrop_blur: Option<BackdropBlur>,
@@ -160,7 +161,7 @@ impl Default for Style {
             align_self: None,
             justify: None,
             background: None,
-            gradient: None,
+            gradients: Capped::default(),
             shadow: None,
             inset_shadow: None,
             backdrop_blur: None,
@@ -510,9 +511,26 @@ impl<S> Element<S> {
         self
     }
 
-    /// Fills with a linear gradient (CSS angle in degrees: 0 up, 90 right, 180 down), over `bg`.
+    /// Fills with a two-stop linear gradient (CSS angle in degrees: 0 up, 90 right, 180 down) instead of
+    /// the background color and any layers set so far. For stops, radial gradients or stacking use
+    /// [`Element::bg_layer`] / [`Element::bg_layers`].
     pub fn bg_gradient(mut self, angle: f32, from: Color, to: Color) -> Self {
-        self.style.gradient = Some(Gradient { from, to, angle });
+        self.style.background = None;
+        self.style.gradients.clear();
+        self.style.gradients.push(Gradient::linear(angle).stop(from).stop(to));
+        self
+    }
+
+    /// Paints `gradient` over the background color and the layers added so far (CSS multiple
+    /// backgrounds, but bottom first: CSS lists the top layer first). At most 4 layers are kept.
+    pub fn bg_layer(mut self, gradient: Gradient) -> Self {
+        self.style.gradients.push(gradient);
+        self
+    }
+
+    /// Replaces the gradient layers, bottom first.
+    pub fn bg_layers(mut self, layers: impl IntoIterator<Item = Gradient>) -> Self {
+        self.style.gradients = layers.into_iter().collect();
         self
     }
 

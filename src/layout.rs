@@ -5,7 +5,7 @@ use taffy::{prelude::*, tree::LayoutOutput, TaffyTree};
 
 use crate::{
     element::{Align, Cursor, Direction, Element, ElementId, Handler, Justify, Kind, Length, MouseHandler, Overflow, Style},
-    scene::{BackdropBlur, Color, Gradient, Path, Quad, Rect, Scene, Shadow, Text},
+    scene::{BackdropBlur, Capped, Color, Gradient, RadialSize, MAX_GRADIENT_LAYERS, Path, Quad, Rect, Scene, Shadow, Text},
     shaper::{Shaper, TextStyle},
 };
 
@@ -39,7 +39,7 @@ pub(crate) struct Node<S> {
     parent: Option<usize>,
     background: Option<Color>,
     hover_background: Option<Color>,
-    gradient: Option<Gradient>,
+    gradients: Capped<Gradient, MAX_GRADIENT_LAYERS>,
     shadow: Option<Shadow>,
     inset_shadow: Option<Shadow>,
     backdrop_blur: Option<BackdropBlur>,
@@ -269,9 +269,9 @@ pub(crate) fn layout_and_paint<S>(
             scene.push_quad(thumbs.pop().expect("checked").1);
         }
         let fill = if hovered.contains(&i) { node.hover_background.or(node.background) } else { node.background };
-        if fill.is_some() || node.gradient.is_some() || node.shadow.is_some() || node.inset_shadow.is_some() || node.backdrop_blur.is_some() || node.border_width > 0. {
+        if fill.is_some() || !node.gradients.is_empty() || node.shadow.is_some() || node.inset_shadow.is_some() || node.backdrop_blur.is_some() || node.border_width > 0. {
             let mut quad = Quad::new(node.bounds, fill.unwrap_or(Color::TRANSPARENT)).rounded_corners(node.radii).clipped(node.clip);
-            quad.gradient = node.gradient;
+            quad.gradients = node.gradients;
             quad.shadow = node.shadow;
             quad.inset_shadow = node.inset_shadow;
             quad.backdrop_blur = node.backdrop_blur;
@@ -326,7 +326,7 @@ fn build<S>(
         parent,
         background: style.background,
         hover_background: style.hover_background,
-        gradient: style.gradient,
+        gradients: style.gradients,
         shadow: style.shadow,
         inset_shadow: style.inset_shadow,
         backdrop_blur: style.backdrop_blur,
@@ -559,7 +559,7 @@ mod tests {
         let mut shaper = Shaper::new();
         let (a, b) = (Color::hex(0xffffff), Color::hex(0x000000));
         let (_, scene) = lay(div().w(50.).h(50.).bg_gradient(140., a, b), &mut shaper);
-        assert_eq!(scene.quads().next().unwrap().gradient, Some(Gradient { from: a, to: b, angle: 140. }));
+        assert_eq!(scene.quads().next().unwrap().gradients.as_slice(), &[Gradient::linear(140.).stop(a).stop(b)]);
     }
 
     #[test]
@@ -591,6 +591,24 @@ mod tests {
         let quads: Vec<&Quad> = scene.quads().collect();
         assert_eq!(quads[0].backdrop_blur, None);
         assert_eq!(quads[1].backdrop_blur, Some(BackdropBlur { radius: 24., saturate: 1.9 }), "later items blur earlier ones");
+    }
+
+    #[test]
+    fn background_layers_stack_in_the_order_given_over_the_background_color() {
+        let mut shaper = Shaper::new();
+        let glow = Gradient::radial((0.1, 0.1), RadialSize::Ellipse(500., 360.)).stop(Color::hex(0xff00ff)).stop_at(Color::TRANSPARENT, 0.7);
+        let base = Gradient::linear(160.).stop(Color::hex(0x111122)).stop(Color::hex(0x221133));
+        let el = div().w(50.).h(50.).bg(Color::hex(0x000000)).bg_layer(base).bg_layer(glow);
+        let (_, scene) = lay(el, &mut shaper);
+        let quad = scene.quads().next().unwrap();
+        assert_eq!(quad.background, Color::hex(0x000000));
+        assert_eq!(quad.gradients.as_slice(), &[base, glow]);
+
+        let (_, scene) = lay(div().w(50.).h(50.).bg(Color::hex(0)).bg_layer(base).bg_layers([glow]), &mut shaper);
+        assert_eq!(scene.quads().next().unwrap().gradients.as_slice(), &[glow], "bg_layers replaces");
+        let (_, scene) = lay(div().w(50.).h(50.).bg(Color::hex(0)).bg_gradient(90., Color::hex(1), Color::hex(2)), &mut shaper);
+        let quad = scene.quads().next().unwrap();
+        assert_eq!((quad.background, quad.gradients.len()), (Color::TRANSPARENT, 1), "bg_gradient replaces the color");
     }
 
     fn list(rows: usize) -> Element<()> {

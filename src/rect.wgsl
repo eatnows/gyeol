@@ -5,6 +5,10 @@ struct Globals {
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
+// Per-quad data too big for instance attributes. Each gradient layer is 12 vec4s:
+// [kind, stop count], [linear: dir.xy, length | radial: center.xy, radii.xy], positions 0-3, positions 4-7,
+// then 8 premultiplied stop colors.
+@group(1) @binding(0) var<storage, read> extras: array<vec4<f32>>;
 
 struct Instance {
     @location(0) pos: vec2<f32>,
@@ -13,8 +17,7 @@ struct Instance {
     @location(3) border_color: vec4<f32>,
     @location(4) radii: vec4<f32>, // top-left, top-right, bottom-right, bottom-left
     @location(5) border_width: f32,
-    @location(6) gradient_end: vec4<f32>,
-    @location(7) gradient: vec2<f32>, // enabled, angle in radians
+    @location(6) extras: vec4<u32>, // gradient layers: offset into `extras`, count
     @location(8) shadow: vec4<f32>, // offset x, offset y, blur
     @location(9) shadow_color: vec4<f32>,
     @location(10) inset: vec4<f32>,
@@ -29,8 +32,7 @@ struct VsOut {
     @location(3) border_color: vec4<f32>,
     @location(4) radii: vec4<f32>,
     @location(5) border_width: f32,
-    @location(6) gradient_end: vec4<f32>,
-    @location(7) gradient: vec2<f32>,
+    @location(6) @interpolate(flat) extras: vec4<u32>,
     @location(8) shadow: vec4<f32>,
     @location(9) shadow_color: vec4<f32>,
     @location(10) inset: vec4<f32>,
@@ -56,8 +58,7 @@ fn vs_main(@builtin(vertex_index) index: u32, inst: Instance) -> VsOut {
     out.border_color = inst.border_color;
     out.radii = inst.radii;
     out.border_width = inst.border_width;
-    out.gradient_end = inst.gradient_end;
-    out.gradient = inst.gradient;
+    out.extras = inst.extras;
     out.shadow = inst.shadow;
     out.shadow_color = inst.shadow_color;
     out.inset = inst.inset;
@@ -90,21 +91,50 @@ fn blurred_cover(d: f32, blur: f32) -> f32 {
     return 1.0 - smoothstep(-blur, blur, d);
 }
 
+fn stop_position(first: vec4<f32>, second: vec4<f32>, i: u32) -> f32 {
+    if i < 4u { return first[i]; }
+    return second[i - 4u];
+}
+
+// The premultiplied color of the gradient layer at `base` for the point `p` (relative to the center).
+fn gradient_layer(base: u32, p: vec2<f32>) -> vec4<f32> {
+    let head = extras[base];
+    let geometry = extras[base + 1u];
+    var t: f32;
+    if head.x < 0.5 {
+        t = dot(p, geometry.xy) / max(geometry.z, 0.0001) + 0.5; // linear: 0 and 1 at the corners
+    } else {
+        t = length((p - geometry.xy) / geometry.zw); // radial: 1 at the ellipse
+    }
+    let positions_a = extras[base + 2u];
+    let positions_b = extras[base + 3u];
+    let count = u32(head.y);
+    var previous = extras[base + 4u];
+    var previous_at = stop_position(positions_a, positions_b, 0u);
+    if t <= previous_at { return previous; }
+    for (var i = 1u; i < count; i = i + 1u) {
+        let next = extras[base + 4u + i];
+        let next_at = stop_position(positions_a, positions_b, i);
+        if t <= next_at {
+            return mix(previous, next, (t - previous_at) / max(next_at - previous_at, 0.00001));
+        }
+        previous = next;
+        previous_at = next_at;
+    }
+    return previous;
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let d = sd_shape(in.local, in.size, in.radii);
     let outer = clamp(0.5 - d * globals.scale, 0.0, 1.0);
     let inner = clamp(0.5 - (d + in.border_width) * globals.scale, 0.0, 1.0);
     let ring = outer - inner;
-    // Premultiplied fill color, flat or a CSS-style linear gradient (interpolated premultiplied).
+    // Premultiplied fill: the background color with the gradient layers painted over it, bottom first.
     var base = vec4<f32>(in.background.rgb * in.background.a, in.background.a);
-    if in.gradient.x > 0.5 {
-        // 0 rad points up, clockwise; the gradient line is as long as the box's projection on it.
-        let dir = vec2<f32>(sin(in.gradient.y), -cos(in.gradient.y));
-        let len = abs(in.size.x * dir.x) + abs(in.size.y * dir.y);
-        let t = clamp(dot(in.local, dir) / max(len, 0.0001) + 0.5, 0.0, 1.0);
-        let end = vec4<f32>(in.gradient_end.rgb * in.gradient_end.a, in.gradient_end.a);
-        base = mix(base, end, t);
+    for (var l = 0u; l < in.extras.y; l = l + 1u) {
+        let layer = gradient_layer(in.extras.x + l * 12u, in.local);
+        base = layer + base * (1.0 - layer.a);
     }
     // Premultiplied output: fill inside the border, border color on the ring.
     let fill = base.rgb * inner;

@@ -129,7 +129,7 @@ fn finish(mut pixels: Vec<u8>, renderer: &Renderer, options: &Options) -> Image 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{Quad, Rect};
+    use crate::scene::{Gradient, Quad, RadialSize, Rect};
 
     /// The image, or `None` (with a note) on a machine with no GPU adapter.
     fn render(scene: &Scene, size: (f32, f32), scale: f32, background: Background) -> Option<Image> {
@@ -254,5 +254,76 @@ mod tests {
         let Some(image) = render(&walled(34., (240., 160.)), (240., 160.), 2., Background::Transparent) else { return };
         let alphas: Vec<u8> = (36..200).step_by(4).map(|x| image.pixel(x, 160)[3]).collect();
         assert!(alphas.iter().all(|&a| a >= 254), "see-through near the left edge: {alphas:?}");
+    }
+
+    fn close(pixel: [u8; 4], expected: [u8; 3], tolerance: i32) -> bool {
+        (0..3).all(|k| (pixel[k] as i32 - expected[k] as i32).abs() <= tolerance)
+    }
+
+    #[test]
+    fn a_three_stop_linear_gradient_passes_through_its_middle_color() {
+        let (red, green, blue) = (Color::hex(0xff0000), Color::hex(0x00ff00), Color::hex(0x0000ff));
+        let mut scene = Scene::default();
+        scene.push_quad(Quad::new(Rect::new(0., 0., 200., 20.), red).gradient_layer(Gradient::linear(90.).stop(red).stop(green).stop(blue)));
+        let Some(image) = render(&scene, (200., 20.), 1., solid(0xffffff)) else { return };
+        assert!(close(image.pixel(1, 10), [255, 0, 0], 8), "{:?}", image.pixel(1, 10));
+        assert!(close(image.pixel(100, 10), [0, 255, 0], 8), "the middle stop is green: {:?}", image.pixel(100, 10));
+        assert!(close(image.pixel(198, 10), [0, 0, 255], 8), "{:?}", image.pixel(198, 10));
+        assert!(close(image.pixel(50, 10), [127, 127, 0], 10), "halfway to green: {:?}", image.pixel(50, 10));
+
+        // An explicit position moves the middle stop: green at 25%.
+        let mut scene = Scene::default();
+        scene.push_quad(Quad::new(Rect::new(0., 0., 200., 20.), red).gradient_layer(Gradient::linear(90.).stop(red).stop_at(green, 0.25).stop(blue)));
+        let Some(image) = render(&scene, (200., 20.), 1., solid(0xffffff)) else { return };
+        assert!(close(image.pixel(50, 10), [0, 255, 0], 8), "{:?}", image.pixel(50, 10));
+    }
+
+    #[test]
+    fn a_radial_gradient_is_centered_where_asked_and_reaches_its_last_stop_at_its_radius() {
+        let (white, black) = (Color::hex(0xffffff), Color::hex(0x000000));
+        let mut scene = Scene::default();
+        let g = Gradient::radial((0.25, 0.5), RadialSize::Circle(50.)).stop(white).stop(black);
+        scene.push_quad(Quad::new(Rect::new(0., 0., 200., 100.), black).gradient_layer(g));
+        let Some(image) = render(&scene, (200., 100.), 1., solid(0xff0000)) else { return };
+        assert!(close(image.pixel(50, 50), [255, 255, 255], 6), "center: {:?}", image.pixel(50, 50));
+        let half = image.pixel(75, 50);
+        assert!(close(half, [127, 127, 127], 10), "half way out: {half:?}");
+        assert!(close(image.pixel(110, 50), [0, 0, 0], 2), "beyond the radius: {:?}", image.pixel(110, 50));
+        assert_eq!(image.pixel(50, 4), image.pixel(50, 95), "symmetric above and below");
+
+        // An ellipse: wider than tall.
+        let mut scene = Scene::default();
+        let g = Gradient::radial((0.5, 0.5), RadialSize::Ellipse(80., 20.)).stop(white).stop(black);
+        scene.push_quad(Quad::new(Rect::new(0., 0., 200., 100.), black).gradient_layer(g));
+        let Some(image) = render(&scene, (200., 100.), 1., solid(0xff0000)) else { return };
+        assert!(image.pixel(100 + 40, 50)[0] > 100, "40px sideways is inside the 80px radius");
+        assert!(close(image.pixel(100, 50 + 25), [0, 0, 0], 2), "25px down is outside the 20px radius");
+    }
+
+    #[test]
+    fn fading_to_transparent_keeps_the_color_instead_of_going_gray() {
+        // red -> transparent: premultiplied interpolation keeps the color pure red and only fades the
+        // opacity; a straight (non-premultiplied) lerp towards transparent black would go dark red.
+        let mut scene = Scene::default();
+        let g = Gradient::linear(90.).stop(Color::hex(0xff0000)).stop(Color::TRANSPARENT);
+        scene.push_quad(Quad::new(Rect::new(0., 0., 200., 20.), Color::TRANSPARENT).gradient_layer(g));
+        let Some(image) = render(&scene, (200., 20.), 1., Background::Transparent) else { return };
+        let (start, middle) = (image.pixel(1, 10), image.pixel(100, 10));
+        assert!(close(start, [255, 0, 0], 8) && start[3] > 245, "{start:?}");
+        assert!(close(middle, [255, 0, 0], 8), "still red, only more transparent: {middle:?}");
+        assert!((120..136).contains(&middle[3]), "half transparent: {middle:?}");
+        assert!(image.pixel(198, 10)[3] < 8);
+    }
+
+    #[test]
+    fn gradient_layers_stack_bottom_to_top_over_the_background_color() {
+        // A radial glow over a linear base over a color: the glow's center shows the glow, far away the base.
+        let mut scene = Scene::default();
+        let base = Gradient::linear(90.).stop(Color::hex(0x000080)).stop(Color::hex(0x000080));
+        let glow = Gradient::radial((0.5, 0.5), RadialSize::Circle(40.)).stop(Color::hex(0xffff00)).stop_at(Color::TRANSPARENT, 1.);
+        scene.push_quad(Quad::new(Rect::new(0., 0., 200., 100.), Color::hex(0xff0000)).gradient_layer(base).gradient_layer(glow));
+        let Some(image) = render(&scene, (200., 100.), 1., solid(0xffffff)) else { return };
+        assert!(close(image.pixel(100, 50), [255, 255, 0], 6), "glow on top: {:?}", image.pixel(100, 50));
+        assert!(close(image.pixel(10, 50), [0, 0, 128], 3), "base over the red background: {:?}", image.pixel(10, 50));
     }
 }

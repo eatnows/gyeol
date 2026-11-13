@@ -5,7 +5,7 @@
 use crate::shaper::TextStyle;
 
 /// An sRGB color with straight (non-premultiplied) alpha, each channel in `0.0..=1.0`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Color {
     pub r: f32,
     pub g: f32,
@@ -63,13 +63,182 @@ impl Rect {
     }
 }
 
-/// A two-stop linear gradient. `angle` is in degrees, CSS-style: 0 points up, 90 points right,
-/// 180 points down, and the color runs `from` -> `to` along that direction.
+/// Most color stops in one [`Gradient`]; extra stops are ignored.
+pub const MAX_GRADIENT_STOPS: usize = 8;
+/// Most gradient layers on one [`Quad`]; extra layers are ignored.
+pub const MAX_GRADIENT_LAYERS: usize = 4;
+
+/// A list with room for at most `N` items, so the types that hold one stay `Copy`. Pushing onto a full
+/// list does nothing.
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Capped<T: Copy + Default, const N: usize> {
+    items: [T; N],
+    len: usize,
+}
+
+impl<T: Copy + Default, const N: usize> Default for Capped<T, N> {
+    fn default() -> Self {
+        Capped { items: [T::default(); N], len: 0 }
+    }
+}
+
+impl<T: Copy + Default, const N: usize> Capped<T, N> {
+    /// Adds `item` at the end; returns whether there was room.
+    pub fn push(&mut self, item: T) -> bool {
+        if self.len == N {
+            return false;
+        }
+        self.items[self.len] = item;
+        self.len += 1;
+        true
+    }
+
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        &self.items[..self.len]
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.as_slice().iter()
+    }
+}
+
+impl<T: Copy + Default, const N: usize> FromIterator<T> for Capped<T, N> {
+    /// Keeps the first `N` items.
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut list = Capped::default();
+        for item in iter {
+            if !list.push(item) {
+                break;
+            }
+        }
+        list
+    }
+}
+
+/// One color of a [`Gradient`] and where it sits along the gradient line, `0.0..=1.0`.
+/// `position: None` is placed by the CSS rules (see [`Gradient::resolved_stops`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GradientStop {
+    pub color: Color,
+    pub position: Option<f32>,
+}
+
+/// How big a radial gradient is: where its last stop (100%) sits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RadialSize {
+    /// A circle reaching the farthest corner of the box (CSS `circle farthest-corner`).
+    FarthestCorner,
+    /// A circle reaching the nearest side of the box (CSS `circle closest-side`).
+    ClosestSide,
+    /// A circle of this radius in logical pixels (CSS `circle 120px`).
+    Circle(f32),
+    /// An ellipse with these horizontal and vertical radii in logical pixels (CSS `ellipse 500px 360px`).
+    Ellipse(f32, f32),
+    /// An ellipse whose radii are these fractions of the box's width and height (CSS `ellipse 50% 50%`).
+    EllipseFraction(f32, f32),
+}
+
+/// The shape of a [`Gradient`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GradientKind {
+    /// CSS `linear-gradient(<angle>, ...)`: `angle` is in degrees, 0 points up, 90 right, 180 down.
+    Linear { angle: f32 },
+    /// CSS `radial-gradient(<size> at <x> <y>, ...)`: `center` is the position as fractions of the box
+    /// (`(0.12, 0.1)` is `at 12% 10%`, `(0.5, 0.5)` the middle).
+    Radial { center: (f32, f32), size: RadialSize },
+}
+
+impl Default for GradientKind {
+    fn default() -> Self {
+        GradientKind::Linear { angle: 180. }
+    }
+}
+
+/// A gradient with up to [`MAX_GRADIENT_STOPS`] color stops, linear or radial. Colors are interpolated
+/// premultiplied, like CSS, so `color -> transparent` fades out without going gray.
+///
+/// ```
+/// # use gyeol::{Color, Gradient, RadialSize};
+/// // radial-gradient(500px 360px at 12% 10%, rgba(120,90,255,.5), transparent 70%)
+/// let glow = Gradient::radial((0.12, 0.10), RadialSize::Ellipse(500., 360.))
+///     .stop(Color::hex(0x785aff).with_alpha(0.5))
+///     .stop_at(Color::TRANSPARENT, 0.7);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Gradient {
-    pub from: Color,
-    pub to: Color,
-    pub angle: f32,
+    pub kind: GradientKind,
+    pub stops: Capped<GradientStop, MAX_GRADIENT_STOPS>,
+}
+
+impl Gradient {
+    /// A linear gradient at `angle` degrees (0 up, 90 right, 180 down), with no stops yet.
+    pub fn linear(angle: f32) -> Gradient {
+        Gradient { kind: GradientKind::Linear { angle }, stops: Capped::default() }
+    }
+
+    /// A radial gradient centered at `center` (fractions of the box), with no stops yet.
+    pub fn radial(center: (f32, f32), size: RadialSize) -> Gradient {
+        Gradient { kind: GradientKind::Radial { center, size }, stops: Capped::default() }
+    }
+
+    /// Adds a stop whose position is worked out by CSS: the first is at 0, the last at 1, and stops
+    /// without a position are spread evenly between their neighbours.
+    pub fn stop(mut self, color: Color) -> Gradient {
+        self.stops.push(GradientStop { color, position: None });
+        self
+    }
+
+    /// Adds a stop at `position` (`0.0..=1.0`, i.e. `70%` is `0.7`).
+    pub fn stop_at(mut self, color: Color, position: f32) -> Gradient {
+        self.stops.push(GradientStop { color, position: Some(position) });
+        self
+    }
+
+    /// The stops with every position filled in, following CSS: the first defaults to 0 and the last to 1,
+    /// positions are clamped to `0..=1` and never go backwards, and runs of unpositioned stops are
+    /// spread evenly between the stops around them.
+    pub fn resolved_stops(&self) -> Vec<(f32, Color)> {
+        let stops = self.stops.as_slice();
+        let mut at: Vec<Option<f32>> = stops.iter().map(|s| s.position.map(|p| p.clamp(0., 1.))).collect();
+        if let Some(first) = at.first_mut() {
+            first.get_or_insert(0.);
+        }
+        if let Some(last) = at.last_mut() {
+            last.get_or_insert(1.);
+        }
+        let mut highest = 0f32;
+        for p in at.iter_mut().flatten() {
+            *p = p.max(highest);
+            highest = *p;
+        }
+        let mut i = 0;
+        while i < at.len() {
+            if at[i].is_some() {
+                i += 1;
+                continue;
+            }
+            let start = i - 1;
+            let end = (i..at.len()).find(|&j| at[j].is_some()).expect("the last stop has a position");
+            let (from, to) = (at[start].expect("set"), at[end].expect("set"));
+            for (k, slot) in at[start + 1..end].iter_mut().enumerate() {
+                *slot = Some(from + (to - from) * (k + 1) as f32 / (end - start) as f32);
+            }
+            i = end;
+        }
+        stops.iter().zip(at).map(|(s, p)| (p.expect("every position is resolved"), s.color)).collect()
+    }
 }
 
 /// A blurred, offset copy of a quad's shape. `blur` is a CSS-style blur radius (gaussian sigma = blur / 2).
@@ -94,9 +263,11 @@ pub struct BackdropBlur {
 #[derive(Clone, Copy, Debug)]
 pub struct Quad {
     pub bounds: Rect,
-    /// Fill color; replaced by `gradient` when that is set.
+    /// Fill color, the bottom layer.
     pub background: Color,
-    pub gradient: Option<Gradient>,
+    /// Gradient layers painted over `background`, first (index 0) at the bottom. CSS lists the top
+    /// layer first, so reverse the order when porting a `background:` list.
+    pub gradients: Capped<Gradient, MAX_GRADIENT_LAYERS>,
     /// Drawn behind the quad, only outside its shape.
     pub shadow: Option<Shadow>,
     /// Drawn inside the quad (inside its border), clipped to its rounded shape.
@@ -113,7 +284,7 @@ pub struct Quad {
 
 impl Quad {
     pub fn new(bounds: Rect, background: Color) -> Quad {
-        Quad { bounds, background, gradient: None, shadow: None, inset_shadow: None, backdrop_blur: None, border_color: Color::TRANSPARENT, border_width: 0., corner_radii: [0.; 4], clip: None }
+        Quad { bounds, background, gradients: Capped::default(), shadow: None, inset_shadow: None, backdrop_blur: None, border_color: Color::TRANSPARENT, border_width: 0., corner_radii: [0.; 4], clip: None }
     }
 
     pub fn rounded(mut self, radius: f32) -> Quad {
@@ -137,9 +308,19 @@ impl Quad {
         self
     }
 
-    /// Fills with a linear gradient instead of the flat background.
+    /// Fills with a two-stop linear gradient instead of the flat background and any earlier gradient
+    /// layers (CSS `linear-gradient(<angle>, from, to)`). For more control use [`Quad::gradient_layer`].
     pub fn gradient(mut self, angle: f32, from: Color, to: Color) -> Quad {
-        self.gradient = Some(Gradient { from, to, angle });
+        self.background = Color::TRANSPARENT;
+        self.gradients.clear();
+        self.gradients.push(Gradient::linear(angle).stop(from).stop(to));
+        self
+    }
+
+    /// Paints `gradient` over everything added so far (the background color and earlier layers).
+    /// At most [`MAX_GRADIENT_LAYERS`] layers are kept.
+    pub fn gradient_layer(mut self, gradient: Gradient) -> Quad {
+        self.gradients.push(gradient);
         self
     }
 
@@ -298,8 +479,9 @@ mod tests {
     fn a_quad_gradient_is_recorded_and_defaults_to_none() {
         let (a, b) = (Color::hex(0xff0000), Color::hex(0x0000ff));
         let quad = Quad::new(Rect::new(0., 0., 10., 10.), a);
-        assert_eq!(quad.gradient, None);
-        assert_eq!(quad.gradient(150., a, b).gradient, Some(Gradient { from: a, to: b, angle: 150. }));
+        assert!(quad.gradients.is_empty());
+        let one = quad.gradient(150., a, b).gradients;
+        assert_eq!(one.as_slice(), &[Gradient::linear(150.).stop(a).stop(b)]);
     }
 
     #[test]
@@ -323,6 +505,43 @@ mod tests {
         let quad = Quad::new(Rect::new(0., 0., 10., 10.), Color::hex(0xffffff).with_alpha(0.3));
         assert_eq!(quad.backdrop_blur, None);
         assert_eq!(quad.backdrop_blurred(24., 1.9).backdrop_blur, Some(BackdropBlur { radius: 24., saturate: 1.9 }));
+    }
+
+    fn positions(g: &Gradient) -> Vec<f32> {
+        g.resolved_stops().iter().map(|(p, _)| *p).collect()
+    }
+
+    #[test]
+    fn missing_stop_positions_are_spread_evenly_like_css() {
+        let c = Color::hex(0xffffff);
+        assert_eq!(positions(&Gradient::linear(0.).stop(c).stop(c)), vec![0., 1.]);
+        assert_eq!(positions(&Gradient::linear(0.).stop(c).stop(c).stop(c)), vec![0., 0.5, 1.]);
+        assert_eq!(positions(&Gradient::linear(0.).stop(c).stop(c).stop(c).stop(c).stop(c)), vec![0., 0.25, 0.5, 0.75, 1.]);
+        // linear-gradient(c, c 20%, c, c 80%, c): the unpositioned one in the middle sits halfway.
+        let g = Gradient::linear(0.).stop(c).stop_at(c, 0.2).stop(c).stop_at(c, 0.8).stop(c);
+        let p = positions(&g);
+        assert!([0., 0.2, 0.5, 0.8, 1.].iter().zip(&p).all(|(a, b)| (a - b).abs() < 1e-6), "{p:?}");
+        // A position behind its predecessor is pushed up to it, and out-of-range ones are clamped.
+        assert_eq!(positions(&Gradient::linear(0.).stop_at(c, 0.6).stop_at(c, 0.2).stop_at(c, 3.)), vec![0.6, 0.6, 1.]);
+        assert!(Gradient::linear(0.).resolved_stops().is_empty());
+        assert_eq!(positions(&Gradient::linear(0.).stop(c)), vec![0.], "a single stop is a flat color");
+    }
+
+    #[test]
+    fn gradients_and_layers_are_capped() {
+        let c = Color::hex(0);
+        let mut g = Gradient::radial((0.5, 0.5), RadialSize::ClosestSide);
+        for _ in 0..20 {
+            g = g.stop(c);
+        }
+        assert_eq!(g.stops.len(), MAX_GRADIENT_STOPS);
+        let mut quad = Quad::new(Rect::default(), c);
+        for _ in 0..9 {
+            quad = quad.gradient_layer(g);
+        }
+        assert_eq!(quad.gradients.len(), MAX_GRADIENT_LAYERS);
+        let layered = quad.gradient(90., c, c);
+        assert_eq!(layered.gradients.len(), 1, "the old two-stop call replaces the layers");
     }
 
     #[test]

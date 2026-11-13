@@ -7,7 +7,7 @@ use winit::{dpi::PhysicalSize, window::Window};
 use crate::{
     error::{err, Error, Result},
     gpu::{Globals, GrowBuffer},
-    scene::{Item, Path, PathCommand, Quad, Rect, Scene},
+    scene::{Gradient, GradientKind, Item, Path, PathCommand, Quad, RadialSize, Rect, Scene, MAX_GRADIENT_STOPS},
     shaper::Shaper,
     text::TextSystem,
 };
@@ -21,10 +21,9 @@ struct QuadInstance {
     border_color: [f32; 4],
     radii: [f32; 4],
     border_width: f32,
-    /// End color of the gradient (its start color is `background`).
-    gradient_end: [f32; 4],
-    /// `[enabled, angle in radians]`.
-    gradient: [f32; 2],
+    /// `[offset, layer count, unused, unused]`: where this quad's gradient layers start in the frame's
+    /// `extras` buffer, counted in `vec4`s, and how many there are.
+    extras: [u32; 4],
     /// `[offset x, offset y, blur, unused]`.
     shadow: [f32; 4],
     shadow_color: [f32; 4],
@@ -34,17 +33,69 @@ struct QuadInstance {
     backdrop: [f32; 2],
 }
 
-impl From<&Quad> for QuadInstance {
-    fn from(q: &Quad) -> Self {
+/// `vec4`s one gradient layer takes in the extras buffer: 2 of geometry, 2 of stop positions, 8 colors.
+const LAYER_VEC4S: usize = 12;
+
+/// Appends `gradient`'s layer record to `out` (the layout `rect.wgsl` reads); `false` when it has no stops.
+fn encode_gradient(gradient: &Gradient, bounds: Rect, out: &mut Vec<[f32; 4]>) -> bool {
+    let stops = gradient.resolved_stops();
+    if stops.is_empty() {
+        return false;
+    }
+    let (w, h) = (bounds.w, bounds.h);
+    let (kind, geometry) = match gradient.kind {
+        GradientKind::Linear { angle } => {
+            // The gradient line is as long as the box's projection on it, so the corners get 0% and 100%.
+            let (dx, dy) = (angle.to_radians().sin(), -angle.to_radians().cos());
+            (0., [dx, dy, (w * dx).abs() + (h * dy).abs(), 0.])
+        }
+        GradientKind::Radial { center, size } => {
+            let (cx, cy) = ((center.0 - 0.5) * w, (center.1 - 0.5) * h);
+            // Distances from the center to the box's sides and corners.
+            let sides = [cx + w / 2., w / 2. - cx, cy + h / 2., h / 2. - cy].map(f32::abs);
+            let corner = (cx.abs() + w / 2.).hypot(cy.abs() + h / 2.);
+            let (rx, ry) = match size {
+                RadialSize::FarthestCorner => (corner, corner),
+                RadialSize::ClosestSide => {
+                    let r = sides.into_iter().fold(f32::INFINITY, f32::min);
+                    (r, r)
+                }
+                RadialSize::Circle(r) => (r, r),
+                RadialSize::Ellipse(rx, ry) => (rx, ry),
+                RadialSize::EllipseFraction(fx, fy) => (fx * w, fy * h),
+            };
+            (1., [cx, cy, rx.max(0.0001), ry.max(0.0001)])
+        }
+    };
+    let mut positions = [1.; MAX_GRADIENT_STOPS];
+    let mut colors = [[0.; 4]; MAX_GRADIENT_STOPS];
+    for (i, (position, color)) in stops.iter().enumerate() {
+        positions[i] = *position;
+        // Premultiplied, so stops blend the way CSS does: `red -> transparent` fades, it does not go dark.
+        colors[i] = [color.r * color.a, color.g * color.a, color.b * color.a, color.a];
+    }
+    let start = out.len();
+    out.push([kind, stops.len() as f32, 0., 0.]);
+    out.push(geometry);
+    out.push([positions[0], positions[1], positions[2], positions[3]]);
+    out.push([positions[4], positions[5], positions[6], positions[7]]);
+    out.extend(colors);
+    debug_assert_eq!(out.len() - start, LAYER_VEC4S);
+    true
+}
+
+impl QuadInstance {
+    fn new(q: &Quad, extras: &mut Vec<[f32; 4]>) -> Self {
+        let offset = extras.len() as u32;
+        let layers = q.gradients.iter().filter(|g| encode_gradient(g, q.bounds, extras)).count() as u32;
         QuadInstance {
             pos: [q.bounds.x, q.bounds.y],
             size: [q.bounds.w, q.bounds.h],
-            background: q.gradient.map_or(q.background, |g| g.from).to_array(),
+            background: q.background.to_array(),
             border_color: q.border_color.to_array(),
             radii: q.corner_radii,
             border_width: q.border_width,
-            gradient_end: q.gradient.map_or([0.; 4], |g| g.to.to_array()),
-            gradient: q.gradient.map_or([0.; 2], |g| [1., g.angle.to_radians()]),
+            extras: [offset, layers, 0, 0],
             shadow: q.shadow.map_or([0.; 4], |s| [s.offset.0, s.offset.1, s.blur, 0.]),
             shadow_color: q.shadow.map_or([0.; 4], |s| s.color.to_array()),
             inset: q.inset_shadow.map_or([0.; 4], |s| [s.offset.0, s.offset.1, s.blur, 0.]),
@@ -206,6 +257,10 @@ pub struct Renderer {
     globals_group: wgpu::BindGroup,
     quad_pipeline: wgpu::RenderPipeline,
     quad_instances: GrowBuffer,
+    /// Gradient layers (and, later, shadows) of this frame's quads: too big for per-instance attributes.
+    quad_extras: GrowBuffer,
+    extras_layout: wgpu::BindGroupLayout,
+    extras_group: Option<wgpu::BindGroup>,
     path_pipeline: wgpu::RenderPipeline,
     path_vertices: GrowBuffer,
     text: TextSystem,
@@ -310,8 +365,18 @@ impl Renderer {
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() }],
         });
 
-        let quad_pipeline = create_quad_pipeline(&device, config.format, &globals_layout);
+        let extras_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("gyeol extras layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            }],
+        });
+        let quad_pipeline = create_quad_pipeline(&device, config.format, &globals_layout, &extras_layout);
         let quad_instances = GrowBuffer::new(&device, wgpu::BufferUsages::VERTEX);
+        let quad_extras = GrowBuffer::new(&device, wgpu::BufferUsages::STORAGE);
         let path_pipeline = create_path_pipeline(&device, config.format, &globals_layout);
         let path_vertices = GrowBuffer::new(&device, wgpu::BufferUsages::VERTEX);
         let text = TextSystem::new(&device, config.format, &globals_layout);
@@ -327,6 +392,9 @@ impl Renderer {
             globals_group,
             quad_pipeline,
             quad_instances,
+            quad_extras,
+            extras_layout,
+            extras_group: None,
             path_pipeline,
             path_vertices,
             text,
@@ -437,6 +505,7 @@ impl Renderer {
         // neighbouring items of the same kind and clip into batches.
         let glyph_ranges = self.text.prepare(shaper, &self.device, &self.queue, scene.texts(), self.scale_factor);
         let mut quads: Vec<QuadInstance> = Vec::new();
+        let mut extras: Vec<[f32; 4]> = Vec::new();
         let mut paths: Vec<PathVertex> = Vec::new();
         let mut batches: Vec<Batch> = Vec::new();
         let mut backdrops: Vec<(BackdropPlan, u32)> = Vec::new(); // plan, index of the quad's instance
@@ -453,7 +522,7 @@ impl Renderer {
                             batches.push(Batch { kind: BatchKind::Backdrop, range: at..at + 1, clip: q.clip });
                         }
                     }
-                    quads.push(QuadInstance::from(q));
+                    quads.push(QuadInstance::new(q, &mut extras));
                     (BatchKind::Quads, quads.len() as u32 - 1..quads.len() as u32, q.clip)
                 }
                 Item::Text(t) => {
@@ -475,6 +544,15 @@ impl Renderer {
             }
         }
         self.quad_instances.write(&self.device, &self.queue, bytemuck::cast_slice(&quads));
+        if extras.is_empty() {
+            extras.push([0.; 4]); // a storage binding cannot be empty
+        }
+        self.quad_extras.write(&self.device, &self.queue, bytemuck::cast_slice(&extras));
+        self.extras_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("gyeol extras group"),
+            layout: &self.extras_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: self.quad_extras.buffer.as_entire_binding() }],
+        }));
         self.path_vertices.write(&self.device, &self.queue, bytemuck::cast_slice(&paths));
         let blur_passes: Vec<BlurPass> = backdrops.iter().flat_map(|(plan, _)| plan.passes).collect();
         self.backdrop.passes.write(&self.device, &self.queue, bytemuck::cast_slice(&blur_passes));
@@ -557,6 +635,7 @@ impl Renderer {
                 BatchKind::Quads => {
                     pass.set_pipeline(&self.quad_pipeline);
                     pass.set_bind_group(0, &self.globals_group, &[]);
+                    pass.set_bind_group(1, self.extras_group.as_ref(), &[]);
                     pass.set_vertex_buffer(0, self.quad_instances.buffer.slice(..));
                     pass.draw(0..6, batch.range.clone());
                 }
@@ -782,6 +861,7 @@ fn create_quad_pipeline(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
     globals_layout: &wgpu::BindGroupLayout,
+    extras_layout: &wgpu::BindGroupLayout,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("gyeol rect shader"),
@@ -789,7 +869,7 @@ fn create_quad_pipeline(
     });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("gyeol rect layout"),
-        bind_group_layouts: &[Some(globals_layout)],
+        bind_group_layouts: &[Some(globals_layout), Some(extras_layout)],
         immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -804,7 +884,7 @@ fn create_quad_pipeline(
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &wgpu::vertex_attr_array![
                     0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32,
-                    6 => Float32x4, 7 => Float32x2, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4, 12 => Float32x2,
+                    6 => Uint32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4, 12 => Float32x2,
                 ],
             })],
         },
@@ -908,6 +988,30 @@ mod tests {
         assert_eq!(plan.passes[0].sigma, 6.);
         assert_eq!(plan.passes[0].taps, 18.);
         assert_eq!(plan.passes[0].dims, [200., 150.]);
+    }
+
+    #[test]
+    fn a_gradient_layer_is_encoded_with_premultiplied_colors_and_resolved_geometry() {
+        use crate::scene::Color;
+        let clear_red = Color::hex(0xff0000).with_alpha(0.5);
+        let gradient = Gradient::linear(90.).stop(clear_red).stop(Color::TRANSPARENT);
+        let mut out = Vec::new();
+        assert!(encode_gradient(&gradient, Rect::new(0., 0., 200., 100.), &mut out));
+        assert_eq!(out.len(), LAYER_VEC4S);
+        assert_eq!(out[0], [0., 2., 0., 0.], "linear, two stops");
+        assert!((out[1][0] - 1.).abs() < 1e-6 && out[1][1].abs() < 1e-6 && (out[1][2] - 200.).abs() < 1e-3, "pointing right, as long as the width");
+        assert_eq!(&out[2][..2], &[0., 1.]);
+        assert_eq!(out[4], [0.5, 0., 0., 0.5], "premultiplied");
+        assert_eq!(out[5], [0.; 4]);
+
+        out.clear();
+        let radial = Gradient::radial((0.25, 0.5), RadialSize::FarthestCorner).stop(Color::hex(0xffffff)).stop(Color::hex(0));
+        assert!(encode_gradient(&radial, Rect::new(0., 0., 200., 100.), &mut out));
+        assert_eq!(out[0][0], 1.);
+        assert_eq!(&out[1][..2], &[-50., 0.], "center relative to the box's middle");
+        assert!((out[1][2] - 150f32.hypot(50.)).abs() < 1e-3, "farthest corner is the right one: {:?}", out[1]);
+
+        assert!(!encode_gradient(&Gradient::linear(0.), Rect::default(), &mut out), "no stops, no layer");
     }
 
     #[test]
