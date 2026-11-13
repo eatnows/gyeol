@@ -44,6 +44,9 @@ const BLINK: Duration = Duration::from_millis(530);
 /// Room after the text so the caret at the end is not clipped.
 const CARET_ROOM: f32 = 2.;
 
+/// What a masked field draws for each character.
+const MASK: char = '•';
+
 /// What an event did to a field, for the app to react to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputChange {
@@ -77,6 +80,7 @@ pub struct TextInput {
     /// The look the field was last drawn with; events need it to measure text.
     style: Cell<TextStyle>,
     ime_enabled: Cell<bool>,
+    masked: bool,
 }
 
 impl Default for TextInput {
@@ -100,6 +104,7 @@ impl TextInput {
             revision: 0,
             style: Cell::new(TextStyle::new(14.)),
             ime_enabled: Cell::new(false),
+            masked: false,
         }
     }
 
@@ -107,6 +112,43 @@ impl TextInput {
         let mut input = Self::new();
         input.set_text(text);
         input
+    }
+
+    // ---- masking -----------------------------------------------------------------------------
+
+    /// Turns password-style masking on or off (off by default). While masked the field draws one
+    /// `•` per character and never puts its text on the clipboard ([`copy`](Self::copy) and
+    /// [`cut`](Self::cut) do nothing; paste still works). [`text`](Self::text) stays the plain text,
+    /// and the caret, selection, clicks and composition all follow the masked display.
+    pub fn set_masked(&mut self, masked: bool) {
+        self.masked = masked;
+    }
+
+    pub fn is_masked(&self) -> bool {
+        self.masked
+    }
+
+    /// `s` as drawn: itself, or one bullet per character when masked.
+    fn display(&self, s: &str) -> String {
+        if self.masked { MASK.to_string().repeat(s.chars().count()) } else { s.to_string() }
+    }
+
+    /// The byte offset in the drawn text of the plain-text byte offset `byte`.
+    fn to_display(&self, byte: usize) -> usize {
+        if self.masked { self.text[..byte.min(self.text.len())].chars().count() * MASK.len_utf8() } else { byte }
+    }
+
+    /// The plain-text byte offset (on a char boundary) for a byte offset in the drawn text.
+    fn from_display(&self, shown: usize) -> usize {
+        if !self.masked {
+            return shown;
+        }
+        self.text.char_indices().nth(shown / MASK.len_utf8()).map_or(self.text.len(), |(i, _)| i)
+    }
+
+    /// The drawn text without the composition, for mapping clicks.
+    fn display_text(&self) -> String {
+        self.display(&self.text)
     }
 
     // ---- reading -----------------------------------------------------------------------------
@@ -371,14 +413,18 @@ impl TextInput {
 
     // ---- clipboard ---------------------------------------------------------------------------
 
-    /// Copies the selection to the clipboard (nothing when empty).
+    /// Copies the selection to the clipboard (nothing when empty, and nothing while masked).
     pub fn copy(&self, cx: &Cx) {
-        if self.has_selection() {
+        if self.has_selection() && !self.masked {
             cx.set_clipboard_text(self.selected_text());
         }
     }
 
+    /// Copies the selection, then deletes it. Does nothing while masked.
     pub fn cut(&mut self, cx: &Cx) {
+        if self.masked {
+            return;
+        }
         self.copy(cx);
         self.delete_selection();
     }
@@ -485,13 +531,13 @@ impl TextInput {
 
     /// What is drawn: the text with the composition spliced in at the caret.
     fn shown(&self) -> String {
-        let mut shown = self.text.clone();
-        shown.insert_str(self.caret, &self.preedit);
+        let mut shown = self.display(&self.text);
+        shown.insert_str(self.to_display(self.caret), &self.display(&self.preedit));
         shown
     }
 
     fn caret_x(&self, shaper: &mut Shaper) -> f32 {
-        shaper.caret_x(&self.shown(), self.style.get(), self.caret + self.preedit.len())
+        shaper.caret_x(&self.shown(), self.style.get(), self.to_display(self.caret) + self.display(&self.preedit).len())
     }
 
     /// Scrolls the field horizontally so the caret is visible once the next frame is laid out.
@@ -627,11 +673,11 @@ pub fn text_input<S: 'static>(input: &TextInput, style: &InputStyle, cx: &mut Cx
     let mut content = div().w(text_w + CARET_ROOM).h(line_h);
     if input.is_composing() {
         // The composition is underlined; nothing else is selected while it runs.
-        let x0 = cx.shaper.caret_x(&shown, font, input.caret);
+        let x0 = cx.shaper.caret_x(&shown, font, input.to_display(input.caret));
         content = content.child(div().absolute().left(x0).top(line_h - 3.).w((caret_x - x0).max(0.)).h(1.5).bg(style.color));
     } else if input.focused && input.has_selection() {
         let (a, b) = input.selection();
-        let (x0, x1) = (cx.shaper.caret_x(&shown, font, a), cx.shaper.caret_x(&shown, font, b));
+        let (x0, x1) = (cx.shaper.caret_x(&shown, font, input.to_display(a)), cx.shaper.caret_x(&shown, font, input.to_display(b)));
         content = content.child(div().absolute().left(x0).top(0.).w(x1 - x0).h(line_h).bg(style.selection).rounded(2.));
     }
     if shown.is_empty() {
@@ -673,7 +719,7 @@ pub fn text_input<S: 'static>(input: &TextInput, style: &InputStyle, cx: &mut Cx
             input.focus();
             input.preedit.clear();
             let x = e.local.0 + cx.scroll_offset(input.scroll_id()).0;
-            let index = cx.shaper.hit(&input.text, input.style.get(), x);
+            let index = input.from_display(cx.shaper.hit(&input.display_text(), input.style.get(), x));
             match e.click_count {
                 1 => input.move_to(index, e.modifiers.shift),
                 2 => input.select_word_at(index),
@@ -687,7 +733,7 @@ pub fn text_input<S: 'static>(input: &TextInput, style: &InputStyle, cx: &mut Cx
                 return;
             }
             let x = e.local.0 + cx.scroll_offset(input.scroll_id()).0;
-            let index = cx.shaper.hit(&input.text, input.style.get(), x);
+            let index = input.from_display(cx.shaper.hit(&input.display_text(), input.style.get(), x));
             input.move_to(index, true);
             input.restart_blink();
             input.reveal_caret(cx);
@@ -983,5 +1029,114 @@ mod tests {
         assert!(a.is_focused());
         cycle_focus(&mut [&mut a, &mut b], true);
         assert!(b.is_focused() && !a.is_focused());
+    }
+
+    // ---- masking ----
+
+    #[test]
+    fn masked_editing_matches_the_plain_field_for_multibyte_text() {
+        let mut plain = TextInput::new();
+        let mut masked = TextInput::new();
+        masked.set_masked(true);
+        assert!(masked.is_masked() && !plain.is_masked());
+        for t in [&mut plain, &mut masked] {
+            t.insert("pw한글é😀x");
+            t.move_left(false, false);
+            t.move_left(false, false);
+            t.move_left(false, true);
+            t.insert("Z");
+            t.move_home(false);
+            t.move_right(false, true);
+            t.move_right(false, true);
+            t.backspace(false);
+            t.move_end(false);
+            t.delete(false);
+        }
+        assert_eq!(masked.text(), plain.text());
+        assert_eq!((masked.caret(), masked.selection()), (plain.caret(), plain.selection()));
+        assert_eq!(masked.selected_text(), plain.selected_text());
+    }
+
+    #[test]
+    fn display_offsets_map_back_to_plain_byte_offsets() {
+        let mut t = TextInput::with_text("a한😀é");
+        t.set_masked(true);
+        let ends: Vec<usize> = t.text().char_indices().map(|(i, _)| i).chain([t.text().len()]).collect();
+        for (n, &byte) in ends.iter().enumerate() {
+            assert_eq!(t.to_display(byte), n * 3);
+            assert_eq!(t.from_display(n * 3), byte);
+        }
+        assert_eq!(t.from_display(10_000), t.text().len(), "past the end clamps");
+        assert_eq!(t.shown(), "••••");
+        assert_eq!(t.text(), "a한😀é", "the plain text is untouched");
+    }
+
+    #[test]
+    fn a_masked_field_draws_bullets_not_the_text() {
+        let mut h = host();
+        h.state_mut().name.set_masked(true);
+        h.click(NAME_AT);
+        type_str(&mut h, "s3한글");
+        assert_eq!(h.state().name.text(), "s3한글");
+        assert!(h.scene().texts().any(|t| t.content == "••••"), "four bullets");
+        assert!(h.scene().texts().all(|t| !t.content.contains("s3") && !t.content.contains('한')), "no plain text drawn");
+    }
+
+    #[test]
+    fn copy_and_cut_are_blocked_while_masked_but_paste_works() {
+        let mut h = host();
+        h.state_mut().name.set_masked(true);
+        h.click(NAME_AT);
+        type_str(&mut h, "secret");
+        h.set_modifiers(cmd());
+        h.key(Key::Char("a".into()), Some("a"));
+        h.set_clipboard("untouched");
+        h.key(Key::Char("c".into()), Some("c"));
+        assert_eq!(h.clipboard().as_deref(), Some("untouched"));
+        h.key(Key::Char("x".into()), Some("x"));
+        assert_eq!(h.clipboard().as_deref(), Some("untouched"));
+        assert_eq!(h.state().name.text(), "secret", "cut neither copies nor deletes");
+        h.set_clipboard("hunter2");
+        h.key(Key::Char("v".into()), Some("v"));
+        assert_eq!(h.state().name.text(), "hunter2", "paste replaces the selection");
+        h.state_mut().name.set_masked(false);
+        h.key(Key::Char("a".into()), Some("a"));
+        h.key(Key::Char("c".into()), Some("c"));
+        assert_eq!(h.clipboard().as_deref(), Some("hunter2"), "unmasked copies again");
+    }
+
+    #[test]
+    fn clicks_selection_and_composition_follow_the_masked_display() {
+        let mut h = host();
+        h.state_mut().name.set_masked(true);
+        h.state_mut().name.set_text("한글abc");
+        h.frame();
+        let bullets = h.text_center("•••••");
+        h.click((21., bullets.1));
+        assert_eq!(h.state().name.caret(), 0);
+        h.click((190., bullets.1));
+        assert_eq!(h.state().name.caret(), "한글abc".len());
+        h.mouse_down((21., bullets.1));
+        h.mouse_move((bullets.0, bullets.1));
+        h.mouse_up((bullets.0, bullets.1));
+        let (a, b) = h.state().name.selection();
+        assert!("한글abc".is_char_boundary(a) && "한글abc".is_char_boundary(b) && a < b, "{a}..{b}");
+        h.click((21., bullets.1));
+        h.ime(Ime::Preedit { text: "하".into(), cursor: None });
+        assert!(h.state().name.is_composing());
+        assert!(h.scene().texts().any(|t| t.content == "••••••"), "the composition is masked too");
+        h.ime(Ime::Commit("하".into()));
+        assert_eq!(h.state().name.text(), "하한글abc");
+    }
+
+    #[test]
+    fn a_long_masked_value_still_scrolls_to_the_caret() {
+        let mut h = host();
+        h.state_mut().name.set_masked(true);
+        h.click(NAME_AT);
+        type_str(&mut h, "the quick brown fox jumps over the lazy dog");
+        h.frame();
+        let id = h.state().name.scroll_id();
+        assert!(h.scroll_offset(id).0 > 0.);
     }
 }
