@@ -178,7 +178,7 @@ impl TextSystem {
 
         for text in texts {
             let first = out.len() as u32;
-            let (buffer, font_system) = shaper.buffer_and_fonts(&text.content, text.style);
+            let (buffer, font_system) = shaper.buffer_and_fonts_wrapped(&text.content, text.style, text.wrap_width);
             for run in buffer.layout_runs() {
                 // The baseline sits on a whole device pixel so glyphs stay crisp.
                 let baseline = ((text.origin.1 + run.line_y) * scale).round();

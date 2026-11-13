@@ -151,6 +151,8 @@ pub struct Style {
     pub text_family: Option<&'static str>,
     pub text_bold: Option<bool>,
     pub text_italic: Option<bool>,
+    /// Wrap this text element into several lines at the width layout gives it; see [`Element::wrap_text`].
+    pub text_wrap: bool,
     pub cursor: Cursor,
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
@@ -197,6 +199,7 @@ impl Default for Style {
             text_family: None,
             text_bold: None,
             text_italic: None,
+            text_wrap: false,
             cursor: Cursor::Default,
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
@@ -831,6 +834,16 @@ impl<S> Element<S> {
 
     pub fn text_color(mut self, color: Color) -> Self {
         self.style.text_color = Some(color);
+        self
+    }
+
+    /// Lets a [`text`] element wrap onto several lines instead of running on in one: at spaces, or
+    /// between characters when a single word is wider than the line (unspaced Korean and CJK break
+    /// anywhere). It wraps at the width available to it (a fixed `.w()`, the parent's width when it
+    /// stretches, or the parent's `max_width`) and its height grows with the line count; `\n` always
+    /// starts a new line. Off by default: text stays on one line. Has no effect on other elements.
+    pub fn wrap_text(mut self) -> Self {
+        self.style.text_wrap = true;
         self
     }
 

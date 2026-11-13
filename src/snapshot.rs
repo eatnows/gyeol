@@ -579,4 +579,29 @@ mod tests {
         assert!(over_light[0] > 200 && over_light[1] > 100 && over_light[1] < 140, "{over_light:?}");
         assert!(over_dark[0] > 100 && over_dark[0] < 140 && over_dark[1] < 10, "{over_dark:?}");
     }
+
+    /// Rows (top to bottom) that hold any dark text pixel.
+    fn inked_rows(image: &Image) -> Vec<u32> {
+        (0..image.height).filter(|&y| (0..image.width).any(|x| image.pixel(x, y)[0] < 128)).collect()
+    }
+
+    #[test]
+    fn wrapped_text_draws_several_lines_inside_its_width_and_short_text_one() {
+        use crate::{div, text, view::View, Cx, Element};
+        struct Bubble(&'static str);
+        impl View for Bubble {
+            fn view(&self, _: &mut Cx) -> Element<Bubble> {
+                div().child(div().max_w(120.).child(text(self.0).text_size(14.).text_color(Color::hex(0)).wrap_text()))
+            }
+        }
+        let render = |t| view(Bubble(t), (300., 120.), 1.);
+        let (Ok(long), Ok(short)) = (render("a fairly long sentence that cannot fit on one short line"), render("short")) else {
+            eprintln!("skipping, no GPU");
+            return;
+        };
+        let (long_rows, short_rows) = (inked_rows(&long), inked_rows(&short));
+        assert!(long_rows.last().unwrap() - long_rows[0] > 2 * 14, "several lines: {long_rows:?}");
+        assert!(short_rows.last().unwrap() - short_rows[0] < 19, "one line: {short_rows:?}");
+        assert!((0..long.height).all(|y| (120..300).all(|x| long.pixel(x, y)[0] > 128)), "nothing drawn right of the 120px width");
+    }
 }

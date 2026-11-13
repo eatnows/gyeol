@@ -408,11 +408,19 @@ pub struct Text {
     pub color: Color,
     /// Only the part inside this rectangle is drawn.
     pub clip: Option<Rect>,
+    /// Wraps the text into lines at most this wide; `None` draws it on one line.
+    pub wrap_width: Option<f32>,
 }
 
 impl Text {
     pub fn new(origin: (f32, f32), content: impl Into<String>, style: impl Into<TextStyle>, color: Color) -> Text {
-        Text { origin, content: content.into(), style: style.into(), color, clip: None }
+        Text { origin, content: content.into(), style: style.into(), color, clip: None, wrap_width: None }
+    }
+
+    /// Wraps the text at `width` logical pixels (see [`Shaper::wrapped_size`](crate::Shaper::wrapped_size)).
+    pub fn wrapped(mut self, width: Option<f32>) -> Text {
+        self.wrap_width = width;
+        self
     }
 
     pub fn clipped(mut self, clip: Option<Rect>) -> Text {

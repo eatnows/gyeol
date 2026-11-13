@@ -31,6 +31,7 @@ pub(crate) type ScrollStore = HashMap<ElementId, (f32, f32)>;
 struct TextLeaf {
     content: String,
     style: TextStyle,
+    wrap: bool,
 }
 
 /// One laid-out element, in paint order (parents before their children).
@@ -51,6 +52,7 @@ pub(crate) struct Node<S> {
     border_color: Color,
     radii: [f32; 4],
     text: Option<(String, TextStyle, Color)>,
+    text_wrap: bool,
     paths: Vec<Path>,
     /// A vector icon and the tint it inherited.
     icon: Option<(std::sync::Arc<crate::icon::IconData>, Color)>,
@@ -236,6 +238,18 @@ pub(crate) fn layout_and_paint<S>(
     let available = taffy::Size { width: AvailableSpace::Definite(size.0), height: AvailableSpace::Definite(size.1) };
     let _ = tree.compute_layout_with_measure(root_id, available, |input, _, leaf, _| {
         let (w, h) = match leaf {
+            Some(leaf) if leaf.wrap => {
+                // The width this text may use: a decided one, else what the parent offers. Under a
+                // min/max-content probe there is none, so it measures as one line.
+                let limit = input.known_dimensions.width.or(match input.available_space.width {
+                    AvailableSpace::Definite(w) => Some(w),
+                    _ => None,
+                });
+                match limit {
+                    Some(limit) => shaper.wrapped_size(&leaf.content, leaf.style, limit),
+                    None => (shaper.width(&leaf.content, leaf.style), Shaper::line_height(leaf.style.size)),
+                }
+            }
             Some(leaf) => (shaper.width(&leaf.content, leaf.style), Shaper::line_height(leaf.style.size)),
             None => (0., 0.),
         };
@@ -358,7 +372,10 @@ pub(crate) fn layout_and_paint<S>(
             scene.push_quad(quad);
         }
         if let Some((content, size, color)) = &node.text {
-            scene.push_text(Text::new((node.bounds.x, node.bounds.y), content.clone(), *size, text_color(i, *color).faded(fade[i])).clipped(node.clip));
+            // Wrap at the laid-out width, plus a hair so a line measured to exactly that width is not
+            // pushed over by rounding.
+            let wrap = node.text_wrap.then_some(node.bounds.w + 0.5);
+            scene.push_text(Text::new((node.bounds.x, node.bounds.y), content.clone(), *size, text_color(i, *color).faded(fade[i])).clipped(node.clip).wrapped(wrap));
         }
         for path in &node.paths {
             let mut path = path.clone().translated(node.bounds.x, node.bounds.y).clipped(node.clip);
@@ -432,6 +449,7 @@ fn build<S>(
         border_color: style.border_color,
         radii: style.radii,
         text: None,
+        text_wrap: false,
         paths: Vec::new(),
         icon: None,
         image: None,
@@ -456,7 +474,8 @@ fn build<S>(
     let taffy_id = match kind {
         Kind::Text(content) => {
             nodes[index].text = Some((content.clone(), text_style, text_color));
-            tree.new_leaf_with_context(taffy_style, TextLeaf { content, style: text_style }).expect("leaf")
+            nodes[index].text_wrap = style.text_wrap;
+            tree.new_leaf_with_context(taffy_style, TextLeaf { content, style: text_style, wrap: style.text_wrap }).expect("leaf")
         }
         Kind::Div(children) => {
             let ids: Vec<NodeId> = children.into_iter().map(|c| build(c, Some(index), below, tree, nodes)).collect();

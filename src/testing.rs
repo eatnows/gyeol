@@ -1010,3 +1010,57 @@ mod close_tests {
         assert!(TestHost::new(Plain, (50., 50.)).request_close_for_test());
     }
 }
+
+#[cfg(test)]
+mod wrap_tests {
+    use super::*;
+    use crate::{div, text, Color, Element};
+
+    const LONG: &str = "The quick brown fox jumps over the lazy dog and keeps running far past the edge of the bubble";
+
+    struct Bubble(&'static str, bool);
+
+    impl View for Bubble {
+        fn view(&self, _cx: &mut Cx) -> Element<Bubble> {
+            let t = text(self.0).text_size(14.);
+            let t = if self.1 { t.wrap_text() } else { t };
+            div().p(10.).child(div().max_w(200.).bg(Color::hex(0xdddddd)).child(t))
+        }
+    }
+
+    fn bubble(h: &TestHost<Bubble>) -> Rect {
+        let q = h.scene().quads().find(|q| q.background.a > 0.9).expect("the bubble quad");
+        q.bounds
+    }
+
+    #[test]
+    fn a_long_sentence_wraps_inside_the_width_and_grows_taller() {
+        let one_line = Shaper::line_height(14.);
+        let h = TestHost::new(Bubble(LONG, true), (400., 400.));
+        let b = bubble(&h);
+        assert!(b.w <= 200.01, "stays inside max_width: {}", b.w);
+        assert!(b.h >= one_line * 3., "several lines: {}", b.h);
+        let t = h.scene().texts().next().unwrap();
+        assert!(t.wrap_width.is_some_and(|w| w <= 200.6));
+    }
+
+    #[test]
+    fn a_short_sentence_and_the_default_stay_on_one_line() {
+        let one_line = Shaper::line_height(14.);
+        let short = TestHost::new(Bubble("Hi there", true), (400., 400.));
+        assert_eq!(bubble(&short).h, one_line);
+        let unwrapped = TestHost::new(Bubble(LONG, false), (400., 400.));
+        assert_eq!(bubble(&unwrapped).h, one_line, "wrapping is opt-in");
+        assert!(unwrapped.scene().texts().next().unwrap().wrap_width.is_none());
+    }
+
+    #[test]
+    fn explicit_newlines_and_unspaced_korean_break() {
+        let one_line = Shaper::line_height(14.);
+        let nl = TestHost::new(Bubble("one\ntwo\nthree", true), (400., 400.));
+        assert_eq!(bubble(&nl).h, 3. * one_line);
+        let ko = TestHost::new(Bubble("가나다라마바사아자차카타파하가나다라마바사아자차카타파하가나다라마바사아자차카타파하", true), (400., 400.));
+        let b = bubble(&ko);
+        assert!(b.h >= 2. * one_line && b.w <= 200.01, "{b:?}");
+    }
+}

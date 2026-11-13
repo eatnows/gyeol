@@ -1,7 +1,7 @@
 //! Text shaping and measuring. Needs no GPU, so layout code and tests can use it directly.
 use std::collections::HashMap;
 
-use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style as FontStyle, Weight};
+use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style as FontStyle, Weight, Wrap};
 
 /// How a run of text looks: size plus optional family, weight and slant.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -44,13 +44,16 @@ impl From<f32> for TextStyle {
     }
 }
 
+/// Text, style and the wrap width's bits (none: one line).
+type ShapedKey = (String, (u32, Option<&'static str>, bool, bool), Option<u32>);
+
 /// Shapes text with system fonts (with per-script fallback) and answers measuring questions.
 ///
 /// Shaped text is cached while it keeps being used, so measuring the same string many times per
 /// frame is cheap.
 pub struct Shaper {
     font_system: FontSystem,
-    shaped: HashMap<(String, (u32, Option<&'static str>, bool, bool)), (Buffer, u64)>,
+    shaped: HashMap<ShapedKey, (Buffer, u64)>,
     frame: u64,
 }
 
@@ -76,6 +79,20 @@ impl Shaper {
     /// Height of one line of text at `size`.
     pub fn line_height(size: f32) -> f32 {
         (size * 1.4).round()
+    }
+
+    /// The size of `text` wrapped to lines at most `max_width` wide: at spaces, or between characters
+    /// when a single word is wider than that (so unspaced Korean or CJK text breaks anywhere). Explicit
+    /// `\n` start new lines; each line is [`Shaper::line_height`] tall. The width is the longest line.
+    pub fn wrapped_size(&mut self, text: &str, style: impl Into<TextStyle>, max_width: f32) -> (f32, f32) {
+        let style = style.into();
+        let (buffer, _) = self.buffer_and_fonts_wrapped(text, style, Some(max_width));
+        let (mut width, mut lines) = (0f32, 0usize);
+        for run in buffer.layout_runs() {
+            width = width.max(run.line_w);
+            lines += 1;
+        }
+        (width, lines.max(1) as f32 * Self::line_height(style.size))
     }
 
     /// The width of `text` laid out on one line.
@@ -124,11 +141,17 @@ impl Shaper {
 
     /// The shaped `text`, plus the font system (needed to rasterize its glyphs).
     pub(crate) fn buffer_and_fonts(&mut self, text: &str, style: TextStyle) -> (&Buffer, &mut FontSystem) {
+        self.buffer_and_fonts_wrapped(text, style, None)
+    }
+
+    /// Like [`Shaper::buffer_and_fonts`], wrapped at `wrap` logical pixels when given.
+    pub(crate) fn buffer_and_fonts_wrapped(&mut self, text: &str, style: TextStyle, wrap: Option<f32>) -> (&Buffer, &mut FontSystem) {
         let frame = self.frame;
-        let entry = self.shaped.entry((text.to_string(), style.key())).or_insert_with(|| {
+        let entry = self.shaped.entry((text.to_string(), style.key(), wrap.map(f32::to_bits))).or_insert_with(|| {
             let size = style.size;
             let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(size, Self::line_height(size)));
-            buffer.set_size(None, None);
+            buffer.set_wrap(if wrap.is_some() { Wrap::WordOrGlyph } else { Wrap::None });
+            buffer.set_size(wrap, None);
             let mut attrs = Attrs::new();
             if let Some(name) = style.family {
                 attrs = attrs.family(Family::Name(name));
