@@ -1111,3 +1111,33 @@ mod maximize_tests {
         assert_eq!(h.maximize_toggles(), 1);
     }
 }
+
+#[cfg(test)]
+mod focus_click_tests {
+    use super::*;
+    use crate::{div, text, text_input, Cx, Element, InputStyle, TextInput};
+
+    struct Form {
+        field: TextInput,
+        clicks: u32,
+    }
+
+    impl View for Form {
+        fn view(&self, cx: &mut Cx) -> Element<Self> {
+            let style = InputStyle::new(14.);
+            div().col().gap(10.)
+                .child(div().w(200.).h(30.).child(text_input(&self.field, &style, cx, |s: &mut Form| &mut s.field)))
+                .child(div().w(100.).h(40.).on_click(|s: &mut Form, _| s.clicks += 1).child(text("go")))
+        }
+    }
+
+    #[test]
+    fn the_first_click_on_a_button_counts_while_a_field_is_focused() {
+        let mut field = TextInput::new();
+        field.focus();
+        let mut host = TestHost::new(Form { field, clicks: 0 }, (400., 200.));
+        host.frame();
+        host.click_text("go");
+        assert_eq!(host.state().clicks, 1, "pressing elsewhere blurs the field, which must not cancel the click");
+    }
+}

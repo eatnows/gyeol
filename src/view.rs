@@ -57,7 +57,9 @@ pub(crate) struct Host<S: View> {
     mouse: (f32, f32),
     scroll: ScrollStore,
     /// The element a click started on; the click only counts if it also ends there.
-    pressed: Option<usize>,
+    /// Where the press that may become a click landed: the bounds of its target, not its index, because
+    /// the tree can change between press and release (a field losing focus adds or removes nodes).
+    pressed: Option<crate::scene::Rect>,
     /// The element a mouse press is being dragged from.
     captured: Option<(Capture, MouseButton, u32)>,
 }
@@ -157,7 +159,7 @@ impl<S: View> Host<S> {
                     handler(&mut self.state, cx);
                 }
                 if button == MouseButton::Left {
-                    self.pressed = laid.click_target(pos);
+                    self.pressed = laid.click_target(pos).map(|i| laid.bounds_of(i));
                 }
                 if let Some(i) = laid.press_target(pos) {
                     if let Some(handler) = laid.on_mouse_down(i) {
@@ -179,7 +181,7 @@ impl<S: View> Host<S> {
                 }
                 if button == MouseButton::Left {
                     let target = laid.click_target(pos);
-                    if target.is_some() && target == self.pressed {
+                    if target.is_some() && target.map(|i| laid.bounds_of(i)) == self.pressed {
                         if let Some(handler) = target.and_then(|i| laid.handler(i)) {
                             handler(&mut self.state, cx);
                         }
