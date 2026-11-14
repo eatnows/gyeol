@@ -38,6 +38,8 @@ pub trait Platform {
     fn pick_file(&self, _filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
         None
     }
+    /// Switches the window between its normal size and the size that fits the screen (macOS "zoom").
+    fn toggle_maximized(&self) {}
     /// Shows a modal dialog for a file or a folder; `None` when cancelled or not implemented.
     fn pick_path(&self, _filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
         None
@@ -96,6 +98,10 @@ impl Platform for WindowPlatform<'_> {
             let _ = filters;
             None
         }
+    }
+
+    fn toggle_maximized(&self) {
+        self.0.set_maximized(!self.0.is_maximized());
     }
 
     fn pick_path(&self, filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
@@ -269,6 +275,15 @@ impl<'a> Cx<'a> {
     /// other platforms this is **not implemented** and always returns `None`.
     pub fn pick_file(&self, filters: &[(&str, &[&str])]) -> Option<std::path::PathBuf> {
         self.platform.pick_file(filters)
+    }
+
+    /// Switches the window between its normal size and the size that fits the screen (macOS's
+    /// "zoom"; maximize elsewhere), as a double click on a title bar does. Works for windows with a
+    /// transparent title bar, whose drag area the app draws itself: call it from an event or mouse
+    /// handler, for example when `click_count == 2` in `on_mouse_down`. The window resizes
+    /// afterwards, which the app sees as the usual size change.
+    pub fn toggle_maximized(&self) {
+        self.platform.toggle_maximized();
     }
 
     /// Like [`Cx::pick_file`], but the user may choose a file matching `filters` **or a folder**

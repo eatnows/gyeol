@@ -25,6 +25,7 @@ struct Recorder {
     reduce_transparency: Cell<bool>,
     next_pick: RefCell<Option<PathBuf>>,
     picks: RefCell<Vec<String>>,
+    maximize_toggles: Cell<u32>,
     clipboard: RefCell<Option<String>>,
 }
 
@@ -56,6 +57,10 @@ impl Platform for Recorder {
     fn pick_file(&self, filters: &[(&str, &[&str])]) -> Option<PathBuf> {
         self.picks.borrow_mut().push(format!("open {}", describe(filters)));
         self.next_pick.borrow_mut().take()
+    }
+
+    fn toggle_maximized(&self) {
+        self.maximize_toggles.set(self.maximize_toggles.get() + 1);
     }
 
     fn pick_path(&self, filters: &[(&str, &[&str])]) -> Option<PathBuf> {
@@ -197,6 +202,11 @@ impl<S: View> TestHost<S> {
     /// cancelled). `None` here means the user cancels.
     pub fn set_next_pick(&mut self, path: Option<PathBuf>) {
         *self.platform.next_pick.borrow_mut() = path;
+    }
+
+    /// How many times the app asked to toggle the window's maximized state (`Cx::toggle_maximized`).
+    pub fn maximize_toggles(&self) -> u32 {
+        self.platform.maximize_toggles.get()
     }
 
     /// The dialogs the app opened so far, as `"open Images:png,jpg"`, `"path ..."`, `"folder"` / `"save name.png Images:png"`.
@@ -1072,5 +1082,32 @@ mod wrap_tests {
         let ko = TestHost::new(Bubble("가나다라마바사아자차카타파하가나다라마바사아자차카타파하가나다라마바사아자차카타파하", true), (400., 400.));
         let b = bubble(&ko);
         assert!(b.h >= 2. * one_line && b.w <= 200.01, "{b:?}");
+    }
+}
+
+#[cfg(test)]
+mod maximize_tests {
+    use super::*;
+    use crate::{div, Color, Element};
+
+    struct TitleBar;
+
+    impl View for TitleBar {
+        fn view(&self, _cx: &mut Cx) -> Element<TitleBar> {
+            div().child(div().id("bar").w(100.).h(30.).bg(Color::hex(0x888888)).on_mouse_down(|_: &mut TitleBar, cx, e| {
+                if e.click_count == 2 {
+                    cx.toggle_maximized();
+                }
+            }))
+        }
+    }
+
+    #[test]
+    fn a_double_click_handler_can_toggle_the_window_size() {
+        let mut h = TestHost::new(TitleBar, (200., 100.));
+        h.mouse_down_n((10., 10.), 1);
+        assert_eq!(h.maximize_toggles(), 0);
+        h.mouse_down_n((10., 10.), 2);
+        assert_eq!(h.maximize_toggles(), 1);
     }
 }
